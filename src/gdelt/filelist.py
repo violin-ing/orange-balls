@@ -1,18 +1,23 @@
 """
-Full list of GDELT files: https://data.gdeltproject.org/gdeltv2/masterfilelist.txt
+Full list of GDELT files: 
+https://data.gdeltproject.org/gdeltv2/masterfilelist.txt
 (Updated every 15 min)
 
 Format follows:
-150383 297a16b493de7cf6ca809a7cc31d0b93 http://data.gdeltproject.org/gdeltv2/20150218230000.export.CSV.zip
-318084 bb27f78ba45f69a17ea6ed7755e9f8ff http://data.gdeltproject.org/gdeltv2/20150218230000.mentions.CSV.zip
-10768507 ea8dde0beb0ba98810a92db068c0ce99 http://data.gdeltproject.org/gdeltv2/20150218230000.gkg.csv.zip
-...
+    - 150383 297a16b493de7cf6ca809a7cc31d0b93 \
+      http://data.gdeltproject.org/gdeltv2/20150218230000.export.CSV.zip
 
-Note the streams: 'export' = events, 'mentions' + 'gkg' = knowledge graph
+    - 318084 bb27f78ba45f69a17ea6ed7755e9f8ff \
+      http://data.gdeltproject.org/gdeltv2/20150218230000.mentions.CSV.zip
+
+    - 10768507 ea8dde0beb0ba98810a92db068c0ce99 \
+      http://data.gdeltproject.org/gdeltv2/20150218230000.gkg.csv.zip
+
+Note the streams:
+    - 'export' = events
+    - 'mentions' + 'gkg' = knowledge graph
 
 Most recent three files: https://data.gdeltproject.org/gdeltv2/lastupdate.txt
-
-
 """
 
 from dataclasses import dataclass
@@ -44,7 +49,11 @@ class GdeltFile:
     # Date of file (YYYY-MM-DD)
     @property
     def day(self) -> date:
-        return date(int(self.stamp[0:4]), int(self.stamp[4:6]), int(self.stamp[6:8]))
+        return date(
+            int(self.stamp[0:4]), 
+            int(self.stamp[4:6]), 
+            int(self.stamp[6:8])
+        )
 
     # Full filename 
     @property
@@ -54,9 +63,9 @@ class GdeltFile:
 
 def parse_index(text: str) -> list[GdeltFile]:
     """
-    Parse masterfilelist.txt or lastupdate.txt into GdeltFile records
+    Parse masterfilelist.txt or lastupdate.txt into GdeltFile records.
 
-    Currently skips any malformed line (there is a lot more data to parse)
+    Currently skips any malformed line (there is a lot more data to parse).
     """
     files: list[GdeltFile] = []
 
