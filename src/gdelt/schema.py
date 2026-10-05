@@ -141,3 +141,6 @@ def assert_schema_length() -> None:
         raise AssertionError(
             f"GDELT 2.0 Events has 61 columns, schema has {len(EVENT_COLUMNS)}"
         )
+
+
+assert_schema_length()

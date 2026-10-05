@@ -8,6 +8,7 @@ This module accomplishes two things:
 
 from __future__ import annotations
 
+import csv
 import hashlib
 import io
 import logging
@@ -75,12 +76,14 @@ def read_events(
         path: Path, 
         columns: tuple[str, ...] = USED_COLUMNS
     ) -> pd.DataFrame:
-    """Read one zipped export file into a DataFrame.
+    """
+    Read one zipped export file into a DataFrame.
 
     Things to note:
         - The file is tab-delimited (not comma-delimited)
         - The file has no header row -> names must be supplied
-        - Encoding is inconsistent (use latin-1 instead of utf-8)
+        - Fields are never quoted -> quoting is switched off
+        - Encoding is UTF-8, so any bad byte is replaced rather than raising
     """
     with zipfile.ZipFile(path) as archive:
         members = archive.namelist()
@@ -89,6 +92,14 @@ def read_events(
                 f"{path.name}: expected one member, found {members}"
             )
         raw = archive.read(members[0])
+
+    # Check: 61 columns = 60 tabs on every line
+    # This is in case pandas pads short rows without warning
+    tab_counts = {line.count(b"\t") for line in raw.splitlines() if line}
+    if tab_counts != {60}:
+        logger.warning(
+            "%s: unexpected tab counts %s", path.name, sorted(tab_counts)
+        )
 
     frame = pd.read_csv(
         io.BytesIO(raw),
@@ -101,9 +112,14 @@ def read_events(
             "ActionGeo_CountryCode": "string",
             "Day": "string",
         },
-        encoding="latin-1",
+        quoting=csv.QUOTE_NONE, # GDELT never quotes fields
+        keep_default_na=False, # Do not treat "NA", "NULL" etc. as missing
+        na_values=[""], # Only an empty field counts as missing
+        encoding="utf-8",
+        encoding_errors="replace", # Bad bytes -> placeholders (don't crash)
         on_bad_lines="warn",
     )
+    
     return frame
 
 

@@ -14,8 +14,9 @@ Format follows:
       http://data.gdeltproject.org/gdeltv2/20150218230000.gkg.csv.zip
 
 Note the streams:
-    - 'export' = events
-    - 'mentions' + 'gkg' = knowledge graph
+    - 'export'   = events (one row per event)
+    - 'mentions' = one row per article that mentions an event
+    - 'gkg'      = Global Knowledge Graph
 
 Most recent three files: https://data.gdeltproject.org/gdeltv2/lastupdate.txt
 """
@@ -32,7 +33,7 @@ LAST_UPDATE = "https://data.gdeltproject.org/gdeltv2/lastupdate.txt"
 
 # Regex for filenames
 FILENAME_REGEX = re.compile(
-    r"(?P<timestamp>\d{14})\.(?P<stream>export|mentions|gkg)\.(?:CSV|csv)\.zip"
+    r"(?P<stamp>\d{14})\.(?P<stream>export|mentions|gkg)\.(?:CSV|csv)\.zip"
 )
 
 
