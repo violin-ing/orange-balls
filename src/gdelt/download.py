@@ -1,5 +1,5 @@
 """
-Downloading GDELT files with verification and caching.
+Downloads GDELT files with verification and caching.
 
 This module accomplishes two things:
     1. Verify the MD5
