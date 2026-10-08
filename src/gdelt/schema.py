@@ -95,6 +95,9 @@ USED_COLUMNS: tuple[str, ...] = (
     "NumArticles",
     "AvgTone",
     "ActionGeo_CountryCode",
+    "Actor1CountryCode",
+    "Actor2CountryCode",
+    "DATEADDED",
     "SOURCEURL",
 )
 
