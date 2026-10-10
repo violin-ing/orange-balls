@@ -25,7 +25,7 @@ CACHE_DIR = Path("data/cache/gdelt")
 
 def make_events() -> pd.DataFrame:
     """
-    Eight hand-written events, small enough to work out the answers by hand.
+    Eight test hand-written events:
 
     id  country  recorded     root  quad  goldstein  articles  tone
     1   US       2026-10-05   01    1      2.0        1         1.0
@@ -38,7 +38,7 @@ def make_events() -> pd.DataFrame:
     4   NI       (repeat of event 4)                                  dropped
     """
     rows = [
-        # id, DATEADDED, FIPS, root, quad, gold, mentions, articles, tone
+        # id, DATEADDED,       FIPS, root, quad, gold, mentions, articles, tone
         (1, "20261005193000", "US", "01", 1,   2.0, 2, 1,  1.0),
         (2, "20261005194500", "US", "14", 3,  -6.0, 6, 3, -3.0),
         (3, "20261005200000", "US", "14", 3,  -4.0, 2, 1, -1.0),
@@ -53,17 +53,22 @@ def make_events() -> pd.DataFrame:
         "EventRootCode", "QuadClass", "GoldsteinScale",
         "NumMentions", "NumArticles", "AvgTone",
     ])
-    # Day is deliberately a year earlier (must not affect the result)
+    # Day is deliberately a year earlier. It must not affect the result.
     frame["Day"] = "20251005"
     frame["SOURCEURL"] = "http://example.com/some-persons-name"
-    for column in ("DATEADDED", "ActionGeo_CountryCode", "EventRootCode", "Day"):
+    text_columns = (
+        "DATEADDED", "ActionGeo_CountryCode", "EventRootCode", "Day",
+    )
+    for column in text_columns:
         frame[column] = frame[column].astype("string")
     return frame
 
 
 def get_row(table: pd.DataFrame, iso3: str, day: str) -> pd.Series:
-    match = table[(table["iso3"] == iso3) & (table["date"] == pd.Timestamp(day))]
-    assert len(match) == 1, f"expected one row for {iso3} {day}, got {len(match)}"
+    same_country = table["iso3"] == iso3
+    same_day = table["date"] == pd.Timestamp(day)
+    match = table[same_country & same_day]
+    assert len(match) == 1, f"expected one row, got {len(match)}"
     return match.iloc[0]
 
 
@@ -81,12 +86,12 @@ def test_totals_and_averages() -> None:
     usa = get_row(to_country_day(make_events()), "USA", "2026-10-05")
 
     assert usa["n_events"] == 3
-    assert usa["n_mentions"] == 10 # 2 + 6 + 2
-    assert usa["n_articles"] == 5 # 1 + 3 + 1
-    assert abs(usa["tone_mean"] - (-1.0)) < 1e-9 # (1 - 3 - 1) / 3
+    assert usa["n_mentions"] == 10          # 2 + 6 + 2
+    assert usa["n_articles"] == 5           # 1 + 3 + 1
+    assert abs(usa["tone_mean"] - (-1.0)) < 1e-9         # (1 - 3 - 1) / 3
     # (1*1 + -3*3 + -1*1) / (1 + 3 + 1) = -9 / 5
     assert abs(usa["tone_mean_weighted"] - (-1.8)) < 1e-9
-    assert abs(usa["goldstein_mean"] - (-8.0 / 3)) < 1e-9 # (2 - 6 - 4) / 3
+    assert abs(usa["goldstein_mean"] - (-8.0 / 3)) < 1e-9  # (2 - 6 - 4) / 3
 
 
 def test_counts_per_code() -> None:
@@ -107,7 +112,9 @@ def test_all_code_columns_always_exist() -> None:
 
 
 def test_counts_add_up() -> None:
-    """Every event lands in exactly one root column and one quad column."""
+    """
+    Every event lands in exactly one root column and one quad column.
+    """
     table = to_country_day(make_events())
     root_columns = [c for c in table.columns if c.startswith("root_")]
     quad_columns = [c for c in table.columns if c.startswith("quad_")]
@@ -157,7 +164,9 @@ def check_real_files() -> None:
     """
     paths = sorted(CACHE_DIR.glob("*.export.CSV.zip"))
     if not paths:
-        raise SystemExit(f"no cached files in {CACHE_DIR}, run the fetch test first")
+        raise SystemExit(
+            f"no cached files in {CACHE_DIR}, run the fetch test first"
+        )
 
     events = pd.concat([read_events(p) for p in paths], ignore_index=True)
     table = to_country_day(events)
@@ -168,7 +177,7 @@ def check_real_files() -> None:
     print(f"dropped: {table.attrs['dropped']}")
 
     used = table.attrs["dropped"]["rows_used"]
-    assert table["n_events"].sum() == used, "events were lost or double counted"
+    assert table["n_events"].sum() == used, "events lost or double counted"
 
     print("\n--- ten country-days with the most events ---")
     columns = ["iso3", "date", "n_events", "n_articles", "tone_mean",

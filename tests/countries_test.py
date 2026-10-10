@@ -1,7 +1,7 @@
 """
 Tests for src/countries/codes.py -- run from the repository root.
 
-Unit tests (no data files needed):
+Unit tests (no network, no data files needed):
 
     python3 -m tests.countries_test
 
@@ -30,7 +30,9 @@ CACHE_DIR = Path("data/cache/gdelt")
 
 
 def test_crosswalk_loads() -> None:
-    """The real file passes its own checks and has a sensible size."""
+    """
+    The real file passes its own checks and has a sensible size.
+    """
     crosswalk = load_crosswalk()
     assert len(crosswalk) > 240, len(crosswalk)
 
@@ -41,18 +43,18 @@ def test_codes_that_differ_between_fips_and_iso() -> None:
     """
     crosswalk = load_crosswalk()
     expected = {
-        "NI": "NGA",  # Nigeria (ISO 'NI' is Nicaragua)
+        "NI": "NGA",  # Nigeria        (ISO 'NI' is Nicaragua)
         "NU": "NIC",  # Nicaragua
-        "IS": "ISR",  # Israel (ISO 'IS' is Iceland)
+        "IS": "ISR",  # Israel         (ISO 'IS' is Iceland)
         "IC": "ISL",  # Iceland
-        "RS": "RUS",  # Russia (ISO 'RS' is Serbia)
+        "RS": "RUS",  # Russia         (ISO 'RS' is Serbia)
         "RI": "SRB",  # Serbia
-        "CH": "CHN",  # China (ISO 'CH' is Switzerland)
+        "CH": "CHN",  # China          (ISO 'CH' is Switzerland)
         "SZ": "CHE",  # Switzerland
         "UK": "GBR",  # United Kingdom
-        "GB": "GAB",  # Gabon (ISO 'GB' is the United Kingdom)
-        "GM": "DEU",  # Germany (ISO 'GM' is Gambia)
-        "SN": "SGP",  # Singapore (ISO 'SN' is Senegal)
+        "GB": "GAB",  # Gabon          (ISO 'GB' is the United Kingdom)
+        "GM": "DEU",  # Germany        (ISO 'GM' is Gambia)
+        "SN": "SGP",  # Singapore      (ISO 'SN' is Senegal)
         "WA": "NAM",  # Namibia
         "US": "USA",
     }
@@ -101,7 +103,9 @@ def test_bad_crosswalk_file_is_rejected(tmp_path: Path | None = None) -> None:
 
     folder = tmp_path or Path(tempfile.mkdtemp())
     bad_file = folder / "bad.csv"
-    bad_file.write_text("fips,iso3,name\nRP,Philippines,PHL\n", encoding="utf-8")
+    bad_file.write_text(
+        "fips,iso3,name\nRP,Philippines,PHL\n", encoding="utf-8"
+    )
     try:
         load_crosswalk(bad_file)
     except CrosswalkError:
@@ -116,7 +120,9 @@ def check_real_files() -> None:
     """
     paths = sorted(CACHE_DIR.glob("*.export.CSV.zip"))
     if not paths:
-        raise SystemExit(f"no cached files in {CACHE_DIR}, run the fetch test first")
+        raise SystemExit(
+            f"no cached files in {CACHE_DIR}, run the fetch test first"
+        )
 
     events = pd.concat([read_events(p) for p in paths], ignore_index=True)
     fips = events["ActionGeo_CountryCode"]

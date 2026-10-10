@@ -1,18 +1,19 @@
 """
 Pulls one full day of GDELT events and aggregates it. Run from the repo root:
 
-    python3 -m src.pull_day                     (default: yesterday, in UTC)
+    python3 -m src.pull_day                     (yesterday, in UTC)
     python3 -m src.pull_day --date 2026-10-09   (a chosen day)
+    python3 -m src.pull_day --no-save           (print the summary only)
 
-This script's process is as follows:
-    1. Fetch the master file list
-    2. Select the export files for that day (a full day is 96 files)
-    3. Download each one into the cache, skipping any that fail
-    4. Read them and builds the country-day table
-    5. Print a summary
+What it does:
+    1. Fetches the master file list
+    2. Selects the export files for that day (a full day is 96 files)
+    3. Downloads each one into the cache, skipping any that fail
+    4. Reads them and builds the country-day table
+    5. Prints a summary
+    6. Saves the table to the database (skip this with --no-save)
 
-Note that nothing is saved apart from the raw ZIP files in the cache. 
-Will create a database to store the country-day table later.
+Pulling a day that is already stored replaces it, so it is safe to run twice.
 """
 
 from __future__ import annotations
@@ -25,24 +26,28 @@ from pathlib import Path
 
 import httpx
 import pandas as pd
+from src.store.database import DB_PATH, FILES_PER_DAY, connect, save_day
 
-from src.countries.codes import NON_COUNTRY_CODES, UnknownCountryCode, load_crosswalk
+from src.countries.codes import (
+    NON_COUNTRY_CODES,
+    UnknownCountryCode,
+    load_crosswalk,
+)
 from src.gdelt.download import ChecksumMismatch, download, read_events
 from src.gdelt.filelist import fetch_index, select_day
 from src.gdelt.schema import USED_COLUMNS
 from src.transform.aggregate import to_country_day
 
 CACHE_DIR = Path("data/cache/gdelt")
-FILES_PER_DAY = 96  # One file every 15 minutes => 24 * 4 = 96 files in a day
 
-# The place name is read so that an unknown country code can be identified. 
-# It is not used by the aggregation.
+# The place name is read so that an unknown country code can be identified
 READ_COLUMNS: tuple[str, ...] = USED_COLUMNS + ("ActionGeo_FullName",)
 
 
 def explain_unknown_codes(
-        events: pd.DataFrame, 
-        error: UnknownCountryCode) -> None:
+        events: pd.DataFrame,
+        error: UnknownCountryCode,
+    ) -> None:
     """
     Print each unknown country code with the places GDELT attached to it.
     """
@@ -52,17 +57,17 @@ def explain_unknown_codes(
     recognised = set(load_crosswalk()) | NON_COUNTRY_CODES | {""}
     codes = events["ActionGeo_CountryCode"].fillna("").str.strip().str.upper()
     for code in sorted(set(codes.unique()) - recognised):
-        places = events.loc[codes == code, "ActionGeo_FullName"]
-        places_filtered = places.value_counts().head(3)
-        print(f"  {code}: {list(places_filtered.index)}")
+        names = events.loc[codes == code, "ActionGeo_FullName"]
+        places = names.value_counts().head(3)
+        print(f"  {code}: {list(places.index)}")
 
     print("\nDownloaded files cached.")
 
 
-def pull_day(target: date) -> pd.DataFrame | None:
+def pull_day(target: date, save: bool = True) -> pd.DataFrame | None:
     started = time.perf_counter()
 
-    # Find out which files exist for this day
+    # Find out which files exist for the target date
     index = fetch_index()
     files = select_day(index, target)
     print(f"{target}: {len(files)} of {FILES_PER_DAY} export files listed")
@@ -70,7 +75,7 @@ def pull_day(target: date) -> pd.DataFrame | None:
         print("No files for this day. Is the date in the future?")
         return None
 
-    # Download files (skip files that fail)
+    # Download files (skip those that fail)
     paths: list[Path] = []
     skipped: list[str] = []
     for number, file in enumerate(files, start=1):
@@ -102,42 +107,47 @@ def pull_day(target: date) -> pd.DataFrame | None:
     # Print summary
     dropped = table.attrs["dropped"]
     no_country = dropped["no_country"] / dropped["rows_in"]
-
     print(f"dropped: {dropped}")
-
     print(f"rows with no usable country: {no_country:.1%}")
 
-    print(
-        f"country-day rows: {len(table)}, countries: {table['iso3'].nunique()}"
-    )
+    countries = table["iso3"].nunique()
+    print(f"country-day rows: {len(table)}, countries: {countries}")
 
     print("\n--- rows per date (expect one date) ---")
-
     print(table.groupby("date")["n_events"].agg(["count", "sum"]).to_string())
 
-    print("\n--- ten countries with the most events ---")
-
-    columns = ["iso3", 
-               "n_events", 
-               "n_articles", 
-               "tone_mean",
-               "tone_mean_weighted", 
-               "goldstein_mean", 
-               "root_14", 
-               "root_19"
-    ]
+    print("\n--- top ten countries with the most events ---")
+    columns = ["iso3", "n_events", "n_articles", "tone_mean",
+               "tone_mean_weighted", "goldstein_mean", "root_14", "root_19"]
     top = table.sort_values("n_events", ascending=False).head(10)
-
     print(top[columns].to_string(index=False, float_format="{:.2f}".format))
 
     print(f"\nevents with an unusual root code: {table['root_other'].sum()}")
-
     print(f"total time: {time.perf_counter() - started:.0f}s")
 
-    if len(files) < FILES_PER_DAY or skipped:
-        print("\nIncomplete day")
-    else:
+    complete = len(paths) == FILES_PER_DAY
+    if complete:
         print("\nFULL DAY PULL OK")
+    else:
+        print("\nNOTE: this is not a complete day, so the totals are low.")
+
+    # Save file
+    if save:
+        connection = connect(DB_PATH)
+        try:
+            written = save_day(
+                connection, table, target, len(files), len(paths)
+            )
+        finally:
+            connection.close()
+        status = "complete" if complete else "INCOMPLETE"
+        print(
+            f"saved {written} country rows for {target} "
+            f"to {DB_PATH} ({status} day)"
+        )
+    else:
+        print("not saved (--no-save)")
+
     return table
 
 
@@ -148,21 +158,21 @@ def main() -> None:
         description="Pull one full day of GDELT events."
     )
     parser.add_argument(
-        "--date", 
-        type=date.fromisoformat, 
-        default=yesterday,
-        help="day to pull, as YYYY-MM-DD (default: yesterday in UTC)"
+        "--date", type=date.fromisoformat, default=yesterday,
+        help="day to pull, as YYYY-MM-DD (default: yesterday in UTC)",
+    )
+    parser.add_argument(
+        "--no-save", action="store_true",
+        help="print the summary without saving to the database",
     )
     args = parser.parse_args()
 
-    # WARNING level keeps the output short
-    # httpx logs every request at INFO
+    # WARNING level keeps the output short. httpx logs every request at INFO.
     logging.basicConfig(
-        level=logging.WARNING, 
-        format="%(levelname)s %(message)s"
+        level=logging.WARNING, format="%(levelname)s %(message)s"
     )
 
-    pull_day(args.date)
+    pull_day(args.date, save=not args.no_save)
 
 
 if __name__ == "__main__":

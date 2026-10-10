@@ -21,12 +21,11 @@ Note the streams:
 Most recent three files: https://data.gdeltproject.org/gdeltv2/lastupdate.txt
 """
 
+import re
 from dataclasses import dataclass
 from datetime import date
-import re
 
 import httpx
-
 
 MASTER_FILE_LIST = "https://data.gdeltproject.org/gdeltv2/masterfilelist.txt"
 LAST_UPDATE = "https://data.gdeltproject.org/gdeltv2/lastupdate.txt"

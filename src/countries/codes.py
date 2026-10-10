@@ -28,8 +28,8 @@ import pandas as pd
 
 CROSSWALK_PATH = Path(__file__).parent / "fips_iso3.csv"
 
-# Codes in GDELT's country list that are not countries, or that have no ISO3
-# code. Rows with these codes get a missing value instead of a country.
+# Codes in GDELT's country list that are not countries, or have no ISO3 code
+# Rows with these codes get a missing value instead of a country
 NON_COUNTRY_CODES: frozenset[str] = frozenset(
     {
         "AT",  # Ashmore and Cartier Islands
@@ -45,7 +45,6 @@ NON_COUNTRY_CODES: frozenset[str] = frozenset(
         "PJ",  # Etorofu, Habomai, Kunashiri and Shikotan Islands
         "UF",  # Undersea Features
         "UU",  # Undesignated Sovereignty
-        "NT",  # Netherlands Antilles (dissolved in 2010)
         "OC",  # Oceans (not in GDELT list but seen in data, e.g. Indian Ocean)
     }
 )
@@ -72,8 +71,8 @@ def load_crosswalk(path: Path = CROSSWALK_PATH) -> dict[str, str]:
     typo here would put a country's events in the wrong place for every
     result that follows.
     """
-    # keep_default_na=False stops pandas turning text such as "NA" into a
-    # missing value. Country codes are exactly the kind of text it mistakes.
+    # Note: keep_default_na=False stops pandas turning country codes such as 
+    # "NA" into a missing value
     frame = pd.read_csv(path, dtype=str, keep_default_na=False)
 
     expected = ["fips", "iso3", "name"]
@@ -100,14 +99,14 @@ def load_crosswalk(path: Path = CROSSWALK_PATH) -> dict[str, str]:
     if not duplicates.empty:
         raise CrosswalkError(f"duplicate FIPS codes: {duplicates.tolist()}")
 
-    # A code cannot be both a country and a non-country.
+    # A code cannot be both a country and a non-country
     overlap = sorted(set(frame["fips"]) & NON_COUNTRY_CODES)
     if overlap:
         raise CrosswalkError(
             f"codes in both the crosswalk and NON_COUNTRY_CODES: {overlap}"
         )
 
-    return dict(zip(frame["fips"], frame["iso3"]))
+    return dict(zip(frame["fips"], frame["iso3"], strict=True))
 
 
 def to_iso3(
@@ -132,7 +131,9 @@ def to_iso3(
     if crosswalk is None:
         crosswalk = load_crosswalk()
 
-    # Tidy the input: empty cells become "", stray spaces and lower case go.
+    # Tidy the input...
+    # - Empty cells -> ""
+    # - Stray spaces and lower case are removed
     cleaned = codes.astype("string").fillna("").str.strip().str.upper()
 
     recognised = set(crosswalk) | NON_COUNTRY_CODES | {""}
