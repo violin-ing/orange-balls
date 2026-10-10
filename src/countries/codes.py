@@ -45,6 +45,8 @@ NON_COUNTRY_CODES: frozenset[str] = frozenset(
         "PJ",  # Etorofu, Habomai, Kunashiri and Shikotan Islands
         "UF",  # Undersea Features
         "UU",  # Undesignated Sovereignty
+        "NT",  # Netherlands Antilles (dissolved in 2010)
+        "OC",  # Oceans (not in GDELT list but seen in data, e.g. Indian Ocean)
     }
 )
 
@@ -92,8 +94,8 @@ def load_crosswalk(path: Path = CROSSWALK_PATH) -> dict[str, str]:
             f"ISO3 codes must be three capital letters: {bad_iso3.tolist()}"
         )
 
-    # A FIPS code listed twice would make the conversion ambiguous.
-    # (An ISO3 code listed twice is allowed, see the module docstring.)
+    # A FIPS code listed twice would make the conversion ambiguous, but an
+    # ISO3 code listed twice is allowed
     duplicates = frame.loc[frame["fips"].duplicated(), "fips"]
     if not duplicates.empty:
         raise CrosswalkError(f"duplicate FIPS codes: {duplicates.tolist()}")
@@ -143,6 +145,7 @@ def to_iso3(
             "or to NON_COUNTRY_CODES if it is not."
         )
 
-    # .map() looks each code up in the dictionary. Codes that are not keys
-    # (i.e. "" and the non-country codes) come back as missing values.
+    # .map() looks each code up in the dictionary
+    # Codes that are not keys (i.e. "" and the non-country codes) come back 
+    # as missing values
     return cleaned.map(crosswalk).astype("string")
