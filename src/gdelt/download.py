@@ -108,6 +108,7 @@ def read_events(
         names=EVENT_COLUMNS,
         usecols=list(columns),
         dtype={
+            "EventCode": "string",
             "EventRootCode": "string",
             "ActionGeo_CountryCode": "string",
             "Day": "string",

@@ -88,6 +88,7 @@ EVENT_COLUMNS: tuple[str, ...] = (
 USED_COLUMNS: tuple[str, ...] = (
     "GlobalEventID",
     "Day",
+    "EventCode",
     "EventRootCode",
     "QuadClass",
     "GoldsteinScale",
@@ -99,6 +100,9 @@ USED_COLUMNS: tuple[str, ...] = (
     "Actor2CountryCode",
     "DATEADDED",
     "SOURCEURL",
+    "Actor2Type1Code",
+    "Actor2Type2Code",
+    "Actor2Type3Code",
 )
 
 # CAMEO event root codes
