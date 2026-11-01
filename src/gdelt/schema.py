@@ -98,11 +98,14 @@ USED_COLUMNS: tuple[str, ...] = (
     "ActionGeo_CountryCode",
     "Actor1CountryCode",
     "Actor2CountryCode",
-    "DATEADDED",
-    "SOURCEURL",
+    "Actor1Type1Code",
+    "Actor1Type2Code",
+    "Actor1Type3Code",
     "Actor2Type1Code",
     "Actor2Type2Code",
     "Actor2Type3Code",
+    "DATEADDED",
+    "SOURCEURL",
 )
 
 # CAMEO event root codes

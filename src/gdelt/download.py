@@ -111,7 +111,16 @@ def read_events(
             "EventCode": "string",
             "EventRootCode": "string",
             "ActionGeo_CountryCode": "string",
+            "Actor1CountryCode": "string",
+            "Actor2CountryCode": "string",
+            "Actor1Type1Code": "string",
+            "Actor1Type2Code": "string",
+            "Actor1Type3Code": "string",
+            "Actor2Type1Code": "string",
+            "Actor2Type2Code": "string",
+            "Actor2Type3Code": "string",
             "Day": "string",
+            "DATEADDED": "string",
         },
         quoting=csv.QUOTE_NONE, # GDELT never quotes fields
         keep_default_na=False, # Do not treat "NA", "NULL" etc. as missing
