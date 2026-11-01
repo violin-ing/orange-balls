@@ -52,7 +52,7 @@ from src.store.database import (
     save_day,
 )
 from src.transform.aggregate import (
-    UNREST_ROOT_CODES,
+    UNREST_LOOSE_ROOT_CODES,
     to_country_day,
     to_event_code_day,
 )
@@ -72,9 +72,7 @@ def explain_unknown_codes(
         events: pd.DataFrame,
         error: UnknownCountryCode,
     ) -> None:
-    """
-    Print each unknown country code with the places GDELT attached to it.
-    """
+    """Print each unknown country code with the places GDELT attached to it."""
     print(f"\nSTOPPED: {error}")
     print("\nMost common place names for each unknown code:")
 
@@ -119,13 +117,17 @@ def print_unmatched_actor_codes(
 
 def print_unrest_by_code(codes: pd.DataFrame, limit: int = 10) -> None:
     """
-    Print the most common full event codes within strict (domestic)
-    unrest, with their average Goldstein value. This shows the detail that
-    the root code alone hides, e.g. demonstrations (141) against riots
-    (145).
+    Print the most common full event codes within loose unrest (domestic,
+    not aimed at media), with their average Goldstein value. This shows
+    the detail that the root code alone hides, e.g. demonstrations (141)
+    against riots (145), or arrests (173) inside root 17.
     """
-    is_unrest = codes["event_code"].str[:2].isin(UNREST_ROOT_CODES)
-    domestic = codes[is_unrest & (codes["relation"] == "domestic")]
+    is_unrest = codes["event_code"].str[:2].isin(UNREST_LOOSE_ROOT_CODES)
+    domestic = codes[
+        is_unrest
+        & (codes["relation"] == "domestic")
+        & (codes["media_target"] == 0)
+    ]
     by_code = domestic.groupby("event_code").agg(
         events=("n_events", "sum"), goldstein=("goldstein_sum", "sum")
     )
@@ -133,7 +135,7 @@ def print_unrest_by_code(codes: pd.DataFrame, limit: int = 10) -> None:
     top = by_code.sort_values("events", ascending=False).head(limit)
 
     print(f"\n--- event code table: {len(codes):,} rows; most common full "
-          "codes in domestic unrest ---")
+          "codes in loose unrest ---")
     print(top.to_string(float_format="{:.1f}".format))
 
 
@@ -151,7 +153,7 @@ def pull_one_day(
     """
     started = time.perf_counter()
 
-    # 1. Find out which files exist for this day
+    # 1. Which files exist for this day
     files = select_day(index, target)
     if not files:
         print(f"{target}: no files listed (is the date in the future?)")
@@ -225,7 +227,7 @@ def pull_one_day(
             print("\nNOTE: this is not a complete day, so the totals "
                   "are low.")
 
-    # 5. Save day's files
+    # 5. Save
     status = "saved" if complete else "incomplete"
     if connection is not None:
         written = save_day(
@@ -310,8 +312,7 @@ def main() -> None:
     if sum(chosen) > 1:
         raise SystemExit("use only one of --date, --from/--to, --days")
 
-    # WARNING level keeps the output short
-    # httpx logs every request at INFO
+    # WARNING level keeps the output short; httpx logs every request at INFO
     logging.basicConfig(
         level=logging.WARNING, format="%(levelname)s %(message)s"
     )

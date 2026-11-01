@@ -1,5 +1,8 @@
 cli
 countries
 gdelt
+load_reference
+pull_day
 reference
+store
 transform

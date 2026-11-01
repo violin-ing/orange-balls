@@ -1,7 +1,7 @@
 """
 Tests for src/store/database.py -- run from the repository root.
 
-Unit tests (use a temporary in-memory database, not the real file):
+Unit tests (use a temporary in-memory database, never the real file):
 
     python3 -m tests.store_test
 
@@ -36,9 +36,7 @@ DAY_2 = date(2026, 10, 6)
 
 
 def make_day(day: date) -> pd.DataFrame:
-    """
-    The country-day rows for one day, built from the hand-written events.
-    """
+    """The country-day rows for one day, built from the hand-written events."""
     full = to_country_day(make_events())
     table = full[full["date"] == pd.Timestamp(day)].reset_index(drop=True)
     table.attrs["dropped"] = full.attrs["dropped"]
@@ -47,9 +45,7 @@ def make_day(day: date) -> pd.DataFrame:
 
 
 def make_codes(day: date) -> pd.DataFrame:
-    """
-    The event code rows for one day, from the hand-written events.
-    """
+    """The event code rows for one day, from the hand-written events."""
     full = to_event_code_day(make_events())
     return full[full["date"] == pd.Timestamp(day)].reset_index(drop=True)
 
@@ -59,7 +55,10 @@ def test_tables_are_created() -> None:
     names = {row[0] for row in connection.execute(
         "SELECT name FROM sqlite_master WHERE type = 'table'"
     )}
-    assert names == {"country_day", "event_code_day", "pull_log"}, names
+    assert names == {
+        "country_day", "event_code_day", "pull_log",
+        "reference", "reference_file",
+    }, names
     connection.close()
 
 
@@ -88,9 +87,7 @@ def test_saving_the_same_day_twice_does_not_duplicate() -> None:
 
 
 def test_saving_again_replaces_old_rows() -> None:
-    """
-    A country missing from the second run must not be left behind.
-    """
+    """A country missing from the second run must not be left behind."""
     connection = connect(":memory:")
     save_day(connection, make_day(DAY_1), DAY_1, 96, 96)
 
@@ -127,11 +124,11 @@ def test_pull_log_records_the_run() -> None:
 
     assert log["date"] == "2026-10-05"
     assert log["files_listed"] == 96 and log["files_read"] == 95
-    assert log["complete"] == 0 # 95 of 96 is not a full day
+    assert log["complete"] == 0                # 95 of 96 is not a full day
     assert log["rows_in"] == 9 and log["no_country"] == 2
     assert log["rows_used"] == 6
-    assert log["actor_unmatched"] == 1 # the EUR region code
-    assert log["pulled_at"].startswith("20") # a UTC timestamp
+    assert log["actor_unmatched"] == 1         # the EUR region code
+    assert log["pulled_at"].startswith("20")   # a UTC timestamp
     connection.close()
 
 
@@ -175,9 +172,7 @@ def test_wrong_columns_are_refused() -> None:
 
 
 def test_database_refuses_duplicate_country_day() -> None:
-    """
-    The primary key is a second line of defence under save_day.
-    """
+    """The primary key is a second line of defence under save_day."""
     connection = connect(":memory:")
     save_day(connection, make_day(DAY_1), DAY_1, 96, 96)
     try:
@@ -226,9 +221,7 @@ def test_event_codes_from_another_day_are_refused() -> None:
 
 
 def test_database_from_older_code_is_refused() -> None:
-    """
-    An old file must give a clear message, not a confusing SQL error.
-    """
+    """An old file must give a clear message, not a confusing SQL error."""
     import tempfile
     from pathlib import Path
 
@@ -248,9 +241,7 @@ def test_database_from_older_code_is_refused() -> None:
 
 
 def check_real_database() -> None:
-    """
-    Print what is stored in the real database file.
-    """
+    """Print what is stored in the real database file."""
     if not DB_PATH.exists():
         raise SystemExit(
             f"{DB_PATH} does not exist yet, run src.pull_day first"

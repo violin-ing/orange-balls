@@ -19,6 +19,7 @@ import pandas as pd
 
 from src.gdelt.download import read_events
 from src.transform.aggregate import (
+    UNREST_LOOSE_ROOT_CODES,
     UNREST_ROOT_CODES,
     to_country_day,
     to_event_code_day,
@@ -34,7 +35,7 @@ def make_events() -> pd.DataFrame:
     id place day   code quad articles tone  actor1 actor2  target
     1  US    5 Oct 010  1    1         1.0  USA    GBR             (a)
     2  US    5 Oct 141  3    3        -3.0  USA    -               (b)
-    3  US    5 Oct 145  3    1        -1.0  -      -               (c)
+    3  US    5 Oct 173  4    1        -1.0  USA    -               (c)
     4  NI    5 Oct 190  4    2        -5.0  NGA    USA             (d)
     5  NI    6 Oct 010  1    4         2.0  EUR    NGA             (e)
     6  none  5 Oct 010  1    1         0.0  FRA    DEU             (f)
@@ -43,18 +44,19 @@ def make_events() -> pd.DataFrame:
     4  (repeat of event 4, must be ignored)
 
     (a) cooperation between two countries: counts for USA and for GBR
-    (b) unrest, strict and loose: actor 1 is local, actor 2 is absent
-    (c) unrest, loose only: no actor has a country
+    (b) unrest, strict and loose: protest, actor 1 local, actor 2 absent
+    (c) unrest, loose only: an arrest (root 17, coerce)
     (d) conflict between two countries: counts for NGA and for USA.
         Not unrest, because actor 2 is foreign.
-    (e) EUR is a region, not a country, so only NGA takes part
+    (e) EUR typed IGO (the EU): counts once, for NGA only
     (f) no location, so no location measures, but FRA and DEU still
         get a cooperation event as actors
     (g) oceans: no country at all
-    (h) pressure on media, and also unrest (both actors are local)
+    (h) pressure on media. Root 17 and domestic, but left out of unrest
+        because the target is media
 
-    Codes: 141 is "demonstrate", 145 is "violent protest or riot", so the
-    two protests share root 14 but not their full code.
+    Codes: 141 is "demonstrate", 173 is "arrest", 172 is "impose
+    administrative sanctions".
     """
     rows = [
         # id, DATEADDED, FIPS, root, quad, goldstein, mentions, articles,
@@ -63,8 +65,8 @@ def make_events() -> pd.DataFrame:
          "USA", "GBR", None),
         (2, "20261005194500", "US", "14", 3, -6.0, 6, 3, -3.0,
          "USA", None, None),
-        (3, "20261005200000", "US", "14", 3, -4.0, 2, 1, -1.0,
-         None, None, None),
+        (3, "20261005200000", "US", "17", 4, -5.0, 2, 1, -1.0,
+         "USA", None, None),
         (4, "20261005200000", "NI", "19", 4, -10.0, 4, 2, -5.0,
          "NGA", "USA", None),
         (5, "20261006001500", "NI", "01", 1, 0.0, 8, 4, 2.0,
@@ -78,34 +80,31 @@ def make_events() -> pd.DataFrame:
         (4, "20261005200000", "NI", "19", 4, -10.0, 4, 2, -5.0,
          "NGA", "USA", None),
     ]
-
     frame = pd.DataFrame(rows, columns=[
         "GlobalEventID", "DATEADDED", "ActionGeo_CountryCode",
         "EventRootCode", "QuadClass", "GoldsteinScale",
         "NumMentions", "NumArticles", "AvgTone",
         "Actor1CountryCode", "Actor2CountryCode", "Actor2Type1Code",
     ])
-
     frame["EventCode"] = frame["GlobalEventID"].map({
-        1: "010", 2: "141", 3: "145", 4: "190",
+        1: "010", 2: "141", 3: "173", 4: "190",
         5: "010", 6: "010", 7: "010", 9: "172",
     })
-
+    frame["Actor1Type1Code"] = frame["GlobalEventID"].map({5: "IGO"})
+    frame["Actor1Type2Code"] = None
+    frame["Actor1Type3Code"] = None
     frame["Actor2Type2Code"] = None
     frame["Actor2Type3Code"] = None
-
-    # Day is deliberately a year earlier (it must not affect the result)
+    # Day is deliberately a year earlier. It must not affect the result.
     frame["Day"] = "20251005"
-
     frame["SOURCEURL"] = "http://example.com/some-persons-name"
-
     text_columns = (
         "DATEADDED", "ActionGeo_CountryCode", "EventCode",
         "EventRootCode", "Day",
         "Actor1CountryCode", "Actor2CountryCode",
+        "Actor1Type1Code", "Actor1Type2Code", "Actor1Type3Code",
         "Actor2Type1Code", "Actor2Type2Code", "Actor2Type3Code",
     )
-
     for column in text_columns:
         frame[column] = frame[column].astype("string")
     return frame
@@ -135,24 +134,24 @@ def test_one_row_per_country_day() -> None:
 def test_totals_and_averages() -> None:
     usa = get_row(to_country_day(make_events()), "USA", "2026-10-05")
 
-    assert usa["n_events"] == 4 # events 1, 2, 3 and 9
-    assert usa["n_mentions"] == 12 # 2 + 6 + 2 + 2
-    assert usa["n_articles"] == 7 # 1 + 3 + 1 + 2
+    assert usa["n_events"] == 4              # events 1, 2, 3 and 9
+    assert usa["n_mentions"] == 12           # 2 + 6 + 2 + 2
+    assert usa["n_articles"] == 7            # 1 + 3 + 1 + 2
     # (1 - 3 - 1 - 4) / 4
     assert abs(usa["tone_mean"] - (-1.75)) < 1e-9
     # (1*1 + -3*3 + -1*1 + -4*2) / (1 + 3 + 1 + 2) = -17 / 7
     assert abs(usa["tone_mean_weighted"] - (-17 / 7)) < 1e-9
-    # (2 - 6 - 4 - 5) / 4
-    assert abs(usa["goldstein_mean"] - (-3.25)) < 1e-9
+    # (2 - 6 - 5 - 5) / 4
+    assert abs(usa["goldstein_mean"] - (-3.5)) < 1e-9
 
 
 def test_counts_per_code() -> None:
     usa = get_row(to_country_day(make_events()), "USA", "2026-10-05")
 
-    assert usa["root_01"] == 1 and usa["root_14"] == 2
-    assert usa["root_17"] == 1
-    assert usa["root_19"] == 0 # absent codes are 0, not missing
-    assert usa["quad_1"] == 1 and usa["quad_3"] == 2 and usa["quad_4"] == 1
+    assert usa["root_01"] == 1 and usa["root_14"] == 1
+    assert usa["root_17"] == 2              # events 3 and 9
+    assert usa["root_19"] == 0              # absent codes are 0, not missing
+    assert usa["quad_1"] == 1 and usa["quad_3"] == 1 and usa["quad_4"] == 2
     assert usa["root_other"] == 0
 
 
@@ -165,9 +164,7 @@ def test_all_code_columns_always_exist() -> None:
 
 
 def test_counts_add_up() -> None:
-    """
-    Every event lands in exactly one root column and one quad column.
-    """
+    """Every event lands in exactly one root column and one quad column."""
     table = to_country_day(make_events())
     root_columns = [c for c in table.columns if c.startswith("root_")]
     quad_columns = [c for c in table.columns if c.startswith("quad_")]
@@ -188,14 +185,35 @@ def test_unrest_strict_and_loose() -> None:
     usa = get_row(table, "USA", "2026-10-05")
     nga = get_row(table, "NGA", "2026-10-05")
 
-    # Strict: events 2 and 9 (actor 1 is local, actor 2 local or absent)
-    assert usa["unrest_events"] == 2
-    assert usa["unrest_articles"] == 5           # 3 + 2
-    # Loose also takes event 3, where no actor has a country
-    assert usa["unrest_loose_events"] == 3
-    assert usa["unrest_loose_articles"] == 6     # 3 + 1 + 2
+    # Strict: event 2 only (protest, domestic)
+    assert usa["unrest_events"] == 1 and usa["unrest_articles"] == 3
+    # Loose adds event 3 (an arrest). Event 9 is also root 17 and
+    # domestic, but its target is media, so it is left out.
+    assert usa["unrest_loose_events"] == 2
+    assert usa["unrest_loose_articles"] == 4     # 3 + 1
     # Event 4 is a fight in Nigeria, but actor 2 is the United States
     assert nga["unrest_events"] == 0 and nga["unrest_loose_events"] == 0
+
+
+def test_unrest_needs_a_domestic_actor() -> None:
+    """
+    An event with no actor country is not domestic.
+    """
+    events = make_events()
+    events.loc[events["GlobalEventID"] == 2, "Actor1CountryCode"] = None
+    usa = get_row(to_country_day(events), "USA", "2026-10-05")
+    assert usa["unrest_events"] == 0
+
+
+def test_media_events_are_not_counted_as_unrest() -> None:
+    """
+    Without the media target, event 9 becomes ordinary loose unrest.
+    """
+    events = make_events()
+    events.loc[events["GlobalEventID"] == 9, "Actor2Type1Code"] = None
+    usa = get_row(to_country_day(events), "USA", "2026-10-05")
+    assert usa["unrest_loose_events"] == 3
+    assert usa["media_pressure_events"] == 0
 
 
 def test_media_pressure() -> None:
@@ -220,13 +238,13 @@ def test_international_conflict_and_cooperation() -> None:
     usa = get_row(table, "USA", "2026-10-05")
     nga = get_row(table, "NGA", "2026-10-05")
 
-    # USA takes part in events 1, 2, 4 and 9
-    # Event 9 has USA as both actors and is counted once
-    assert usa["actor_events"] == 4
-    assert usa["actor_articles"] == 8 # 1 + 3 + 2 + 2
-    assert usa["intl_coop_events"] == 1 # event 1, with GBR
+    # USA takes part in events 1, 2, 3, 4 and 9. Event 9 has USA as both
+    # actors and is counted once.
+    assert usa["actor_events"] == 5
+    assert usa["actor_articles"] == 9            # 1 + 3 + 1 + 2 + 2
+    assert usa["intl_coop_events"] == 1          # event 1, with GBR
     assert usa["intl_coop_articles"] == 1
-    assert usa["intl_conflict_events"] == 1 # event 4, with NGA
+    assert usa["intl_conflict_events"] == 1      # event 4, with NGA
     assert usa["intl_conflict_articles"] == 2
 
     # The same conflict event also counts for Nigeria
@@ -239,7 +257,7 @@ def test_country_seen_only_as_actor_gets_a_row() -> None:
     gbr = get_row(table, "GBR", "2026-10-05")
     assert gbr["n_events"] == 0 and gbr["actor_events"] == 1
     assert gbr["intl_coop_events"] == 1
-    assert pd.isna(gbr["tone_mean"]) # no located events
+    assert pd.isna(gbr["tone_mean"])             # no located events
 
     # Event 6 has no location but still counts for its two actors
     fra = get_row(table, "FRA", "2026-10-05")
@@ -247,13 +265,51 @@ def test_country_seen_only_as_actor_gets_a_row() -> None:
     assert fra["intl_coop_events"] == 1 and deu["intl_coop_events"] == 1
 
 
-def test_region_code_is_not_a_country() -> None:
+def test_igo_counts_for_the_country_only() -> None:
     table = to_country_day(make_events())
-    assert "EUR" not in table["iso3"].tolist()
+    assert "EUR" not in table["iso3"].tolist()   # never a row of its own
     assert table.attrs["actor_codes_unmatched"] == {"EUR": 1}
-    # Event 5: EUR is not a country, so nothing is cross-border
+    # Event 5: cooperation between the EU (typed IGO) and Nigeria counts
+    # for Nigeria
     nga = get_row(table, "NGA", "2026-10-06")
+    assert nga["actor_events"] == 1 and nga["intl_coop_events"] == 1
+
+
+def set_actor1(events: pd.DataFrame, country, type_code) -> pd.DataFrame:
+    """
+    Change actor 1 of event 5 (the EU and Nigeria cooperating).
+    """
+    is_five = events["GlobalEventID"] == 5
+    events.loc[is_five, "Actor1CountryCode"] = country
+    events.loc[is_five, "Actor1Type1Code"] = type_code
+    return events
+
+
+def test_igo_with_blank_country_counts() -> None:
+    """
+    The UN has a blank country field but is typed IGO.
+    """
+    events = set_actor1(make_events(), None, "IGO")
+    nga = get_row(to_country_day(events), "NGA", "2026-10-06")
+    assert nga["intl_coop_events"] == 1
+
+
+def test_region_name_without_igo_type_does_not_count() -> None:
+    """
+    A plain region such as "Africa" is not an organisation.
+    """
+    events = set_actor1(make_events(), "AFR", None)
+    nga = get_row(to_country_day(events), "NGA", "2026-10-06")
     assert nga["actor_events"] == 1 and nga["intl_coop_events"] == 0
+
+
+def test_ngo_does_not_count() -> None:
+    """
+    Non-governmental organisations such as Amnesty are left out.
+    """
+    events = set_actor1(make_events(), None, "NGO")
+    nga = get_row(to_country_day(events), "NGA", "2026-10-06")
+    assert nga["intl_coop_events"] == 0
 
 
 def test_goldstein_sums() -> None:
@@ -261,13 +317,13 @@ def test_goldstein_sums() -> None:
     usa = get_row(table, "USA", "2026-10-05")
     nga = get_row(table, "NGA", "2026-10-05")
 
-    assert usa["unrest_goldstein"] == -11.0 # events 2 and 9
-    assert usa["unrest_loose_goldstein"] == -15.0 # plus event 3
-    assert usa["media_pressure_goldstein"] == -5.0 # event 9
-    assert usa["actor_goldstein"] == -19.0 # 1, 2, 4 and 9
-    assert usa["intl_coop_goldstein"] == 2.0 # event 1
-    assert usa["intl_conflict_goldstein"] == -10.0 # event 4
-    assert nga["intl_conflict_goldstein"] == -10.0 # same event
+    assert usa["unrest_goldstein"] == -6.0           # event 2
+    assert usa["unrest_loose_goldstein"] == -11.0    # plus event 3
+    assert usa["media_pressure_goldstein"] == -5.0   # event 9
+    assert usa["actor_goldstein"] == -24.0           # 1, 2, 3, 4 and 9
+    assert usa["intl_coop_goldstein"] == 2.0         # event 1
+    assert usa["intl_conflict_goldstein"] == -10.0   # event 4
+    assert nga["intl_conflict_goldstein"] == -10.0   # same event
     # A criterion with no events has a sum of 0, not a missing value
     assert nga["unrest_goldstein"] == 0.0
 
@@ -276,16 +332,16 @@ def test_event_code_table() -> None:
     codes = to_event_code_day(make_events())
     found = [
         (r.iso3, str(r.date.date()), r.event_code, r.relation,
-         r.n_events, r.n_articles, r.goldstein_sum)
+         r.media_target, r.n_events, r.n_articles, r.goldstein_sum)
         for r in codes.itertuples()
     ]
     assert found == [
-        ("NGA", "2026-10-05", "190", "foreign", 1, 2, -10.0),
-        ("NGA", "2026-10-06", "010", "foreign", 1, 4, 0.0),
-        ("USA", "2026-10-05", "010", "foreign", 1, 1, 2.0),
-        ("USA", "2026-10-05", "141", "domestic", 1, 3, -6.0),
-        ("USA", "2026-10-05", "145", "no_country", 1, 1, -4.0),
-        ("USA", "2026-10-05", "172", "domestic", 1, 2, -5.0),
+        ("NGA", "2026-10-05", "190", "foreign", 0, 1, 2, -10.0),
+        ("NGA", "2026-10-06", "010", "foreign", 0, 1, 4, 0.0),
+        ("USA", "2026-10-05", "010", "foreign", 0, 1, 1, 2.0),
+        ("USA", "2026-10-05", "141", "domestic", 0, 1, 3, -6.0),
+        ("USA", "2026-10-05", "172", "domestic", 1, 1, 2, -5.0),
+        ("USA", "2026-10-05", "173", "domestic", 0, 1, 1, -5.0),
     ], found
 
 
@@ -302,9 +358,10 @@ def test_event_code_table_agrees_with_country_day() -> None:
     located = table.loc[table["n_events"] > 0, "n_events"]
     assert totals.sort_index().equals(located.sort_index())
 
-    is_unrest = codes["event_code"].str[:2].isin(UNREST_ROOT_CODES)
-    strict = codes[is_unrest & (codes["relation"] == "domestic")]
-    loose = codes[is_unrest & (codes["relation"] != "foreign")]
+    root = codes["event_code"].str[:2]
+    domestic = (codes["relation"] == "domestic") & (codes["media_target"] == 0)
+    strict = codes[root.isin(UNREST_ROOT_CODES) & domestic]
+    loose = codes[root.isin(UNREST_LOOSE_ROOT_CODES) & domestic]
     for subset, column in ((strict, "unrest"), (loose, "unrest_loose")):
         sums = subset.groupby(keys)[["n_events", "goldstein_sum"]].sum()
         for key, row in sums.iterrows():
@@ -318,8 +375,8 @@ def test_dropped_rows_are_recorded() -> None:
     table = to_country_day(make_events())
     assert table.attrs["dropped"] == {
         "rows_in": 9,
-        "duplicate_event": 1, # event 4 appears twice
-        "no_country": 2, # event 6 (empty) and event 7 (oceans)
+        "duplicate_event": 1,   # event 4 appears twice
+        "no_country": 2,        # event 6 (empty) and event 7 (oceans)
         "bad_date": 0,
         "rows_used": 6,
     }, table.attrs["dropped"]
@@ -348,9 +405,7 @@ def share(part: int, whole: int) -> str:
 
 
 def check_real_files() -> None:
-    """
-    Aggregate every cached GDELT file and print the result.
-    """
+    """Aggregate every cached GDELT file and print the result."""
     paths = sorted(CACHE_DIR.glob("*.export.CSV.zip"))
     if not paths:
         raise SystemExit(
@@ -399,14 +454,18 @@ def check_real_files() -> None:
     print(top[columns].to_string(index=False))
 
     codes = to_event_code_day(events)
-    is_unrest = codes["event_code"].str[:2].isin(UNREST_ROOT_CODES)
-    domestic = codes[is_unrest & (codes["relation"] == "domestic")]
+    is_unrest = codes["event_code"].str[:2].isin(UNREST_LOOSE_ROOT_CODES)
+    domestic = codes[
+        is_unrest
+        & (codes["relation"] == "domestic")
+        & (codes["media_target"] == 0)
+    ]
     by_code = domestic.groupby("event_code").agg(
         events=("n_events", "sum"), goldstein=("goldstein_sum", "sum")
     )
     by_code["goldstein_per_event"] = by_code["goldstein"] / by_code["events"]
     print(f"\n--- event code table: {len(codes):,} rows ---")
-    print("most common full codes within strict unrest:")
+    print("most common full codes within loose unrest:")
     top_codes = by_code.sort_values("events", ascending=False).head(12)
     print(top_codes.to_string(float_format="{:.1f}".format))
 
@@ -437,11 +496,16 @@ def main() -> None:
         test_counts_add_up,
         test_unusual_root_code_is_counted_as_other,
         test_unrest_strict_and_loose,
+        test_unrest_needs_a_domestic_actor,
+        test_media_events_are_not_counted_as_unrest,
         test_media_pressure,
         test_media_code_in_second_type_slot_counts,
         test_international_conflict_and_cooperation,
         test_country_seen_only_as_actor_gets_a_row,
-        test_region_code_is_not_a_country,
+        test_igo_counts_for_the_country_only,
+        test_igo_with_blank_country_counts,
+        test_region_name_without_igo_type_does_not_count,
+        test_ngo_does_not_count,
         test_goldstein_sums,
         test_event_code_table,
         test_event_code_table_agrees_with_country_day,
