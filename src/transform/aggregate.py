@@ -1,41 +1,39 @@
 """
-Turns GDELT event rows into country-day tables.
+Turns raw GDELT event records into daily summary tables for each country.
 
-Input:  the table from read_events() or read_day(), one row per event.
-Output: two tables, both holding plain measures only.
-    to_country_day()      one row per (iso3, date), the criteria inputs
-    to_event_code_day()   one row per (iso3, date, event_code, relation,
-                          media_target), the same events at full CAMEO
-                          code detail
+The input is an event table from read_events() or read_day(), with one
+row per event.
 
-This module stores counts and sums. It does not produce shares, weights,
-scores or levels. Those belong to the scoring layer, so the scoring design
-can change without touching this code.
+The module produces two output tables:
+    - to_country_day(): one row per country per day, containing event
+      totals and the measurements needed by the scoring criteria.
+    - to_event_code_day(): one row per country, day, event code,
+      relationship and media-target status, preserving the full CAMEO
+      event code detail.
 
-A country gets measures in two different ways:
-    - by LOCATION: events that happened in the country (ActionGeo_CountryCode).
-      Used for totals, tone, unrest and pressure on media.
-    - by ACTOR: events the country took part in, wherever they happened
-      (Actor1CountryCode, Actor2CountryCode). Used for international conflict 
-      and cooperation.
+This module only counts events and adds up measurements. It does not
+calculate percentages, weights, scores or overall levels. Those
+calculations belong in the scoring module.
 
-Severity:
-    GDELT gives no severity for a single event. GoldsteinScale is fixed by the 
-    CAMEO event code (a riot is always the same value, however many were hurt),
-    so it measures how severe that TYPE of event usually is.
+Countries are counted in two different ways:
+    - By location: events that happened inside the country. Used for
+      general totals, tone, domestic unrest and pressure on the media.
+    - By actor: events in which the country took part, even if they
+      happened somewhere else. Used for international conflict and
+      cooperation.
 
-    Two things are stored so that severity can be applied in scoring:
-        - a Goldstein sum next to every criterion count (<name>_goldstein)
-        - the full event code table, so criteria can be defined at the level
-        of e.g. "violent protest" (145) rather than "protest" (14)
+GoldsteinScale is not a measure of how severe an individual event was.
+It is a value assigned to the event type by GDELT. The module stores
+Goldstein totals alongside event counts, and keeps the full event-code
+breakdown so the scoring rules can distinguish specific types of events.
 
-Things to note:
-    - The date is the day GDELT recorded the event (DATEADDED, in UTC),
-      not the Day column. Day can be a week, a month or a year earlier
-      when an article talks about a past event.
-    - Every criterion is stored as a number of events, a number of articles
-      and a Goldstein sum. The scoring layer picks which to use.
-    - SOURCEURL is not carried into the output.
+Important details:
+    - The event date is taken from DATEADDED, when GDELT recorded the
+      event, rather than the Day field, which may refer to an earlier
+      event mentioned in an article.
+    - Each criterion stores event counts, article counts and Goldstein
+      totals. The scoring module decides which measure to use.
+    - SOURCEURL is not included in the output.
 """
 
 from __future__ import annotations
@@ -55,7 +53,7 @@ from src.gdelt.schema import CAMEO_ROOT_LABELS, QUAD_CLASS_LABELS
 
 logger = logging.getLogger(__name__)
 
-# Columns this module needs from the events table
+# Columns needed from the events table
 REQUIRED_COLUMNS: tuple[str, ...] = (
     "GlobalEventID",
     "DATEADDED",
@@ -77,55 +75,58 @@ REQUIRED_COLUMNS: tuple[str, ...] = (
     "AvgTone",
 )
 
-ROOT_CODES: list[str] = sorted(CAMEO_ROOT_LABELS)     # "01" to "20"
-QUAD_CLASSES: list[int] = sorted(QUAD_CLASS_LABELS)   # 1 to 4
+ROOT_CODES: list[str] = sorted(CAMEO_ROOT_LABELS) # "01" to "20"
+QUAD_CLASSES: list[int] = sorted(QUAD_CLASS_LABELS) # 1 to 4
 
 
-# --- Which events count toward each criterion ---
+# === EVENT SELECTION RULES ===
 
-# Domestic unrest. The test for a code is whether that kind of event
-# absorbs national attention (the attention-competition argument).
-#   strict: protest, assault, fight, mass violence
-#   loose:  strict plus coerce (17), which is ambiguous: state coercion
-#           signals instability, but sits close to the media criteria.
-# Both are stored so the choice can be tested in sensitivity analysis.
+# Domestic unrest codes
+# Strict definition: protest, assault, fighting and mass violence
 UNREST_ROOT_CODES: frozenset[str] = frozenset({"14", "18", "19", "20"})
+
+# Broader definition: also includes state coercion (code 17)
 UNREST_LOOSE_ROOT_CODES: frozenset[str] = UNREST_ROOT_CODES | {"17"}
 
-# Pressure on media: disapprove, reject, threaten, coerce, assault,
-# where the target (actor 2) is coded as media
+
+# Pressure on media codes
+# Includes disapproval, rejection, threats, coercion and assault
 MEDIA_PRESSURE_ROOT_CODES: frozenset[str] = frozenset(
     {"11", "12", "13", "17", "18"}
 )
 MEDIA_TYPE_CODE = "MED"
 
-# Intergovernmental organisations (the UN, NATO, the EU, ECOWAS ...).
-# These are the "broadly representative international bodies" the IAA
-# Declaration names, so an event with one counts as international.
-# Non-governmental organisations (type NGO, e.g. Amnesty) do not: see the
-# criteria selection record.
+# Intergovernmental organisations (IGOs), e.g. UN, NATO, EU
 IGO_TYPE_CODE = "IGO"
 
+# QuadClasses:
+# > 3 and 4 = conflict
+# > 1 and 2 = cooperation
 CONFLICT_QUAD_CLASSES: frozenset[int] = frozenset({3, 4})
 COOPERATION_QUAD_CLASSES: frozenset[int] = frozenset({1, 2})
 
-# How the actors of a located event relate to the place it happened.
-# Every located event gets exactly one of these.
-RELATION_DOMESTIC = "domestic"      # actor 1 local; actor 2 local or absent
-RELATION_NO_COUNTRY = "no_country"  # no foreign actor, but not domestic
-RELATION_FOREIGN = "foreign"        # at least one actor is foreign
+# How event actors relate to the country where the event happened:
+# 1. domestic: actor 1 is local; actor 2 is local or absent
+# 2. no_country: no foreign actor, but the event is not domestic
+# 3. foreign: at least one actor is foreign
+RELATION_DOMESTIC = "domestic"
+RELATION_NO_COUNTRY = "no_country"
+RELATION_FOREIGN = "foreign"
+
+# Measures calculated for events by location and by actor
 RELATIONS: list[str] = [
     RELATION_DOMESTIC, RELATION_NO_COUNTRY, RELATION_FOREIGN,
 ]
 
-# Criterion columns, in output order. Each name is stored three times:
-#   <name>_events     number of events
-#   <name>_articles   number of articles about those events
-#   <name>_goldstein  sum of GoldsteinScale over those events
+# Each criterion has three measures:
+# 1. events = number of events
+# 2. articles = number of articles
+# 3. goldstein = sum of GoldsteinScale values
 LOCATION_COUNTS: list[str] = ["unrest", "unrest_loose", "media_pressure"]
 ACTOR_COUNTS: list[str] = ["actor", "intl_conflict", "intl_coop"]
 COUNT_KINDS: tuple[str, ...] = ("events", "articles", "goldstein")
 
+# Columns in the detailed event-code output table.
 EVENT_CODE_COLUMNS: list[str] = [
     "iso3", "date", "event_code", "relation", "media_target",
     "n_events", "n_articles", "goldstein_sum",
@@ -158,9 +159,9 @@ class _Prepared:
     """
     The cleaned events shared by both public functions.
     """
-    work: pd.DataFrame          # one row per event with a valid date
-    dropped: dict[str, int]     # what was left out, and why
-    unmatched: dict[str, int]   # actor codes that are not a country
+    work: pd.DataFrame # one row per event with a valid date
+    dropped: dict[str, int] # what was left out, and why
+    unmatched: dict[str, int] # actor codes that are not a country
 
 
 def _prepare(events: pd.DataFrame) -> _Prepared:
@@ -174,21 +175,19 @@ def _prepare(events: pd.DataFrame) -> _Prepared:
 
     rows_in = len(events)
 
-    # Work on a copy so the caller's table is not changed.
+    # Work on a copy
     work = events[list(REQUIRED_COLUMNS)].copy()
-
 
     # --- 1. Remove repeated events ---
 
-    # Each GlobalEventID should appear once. A repeat means the same file
-    # was read twice, and counting it twice would inflate that day.
+    # Each GlobalEventID should appear once
     work = work.drop_duplicates(subset="GlobalEventID")
     rows_duplicate = rows_in - len(work)
 
 
     # --- 2. Countries ---
     
-    # Location: FIPS -> ISO3. Actors: CAMEO -> ISO3.
+    # Location: FIPS -> ISO3; Actors: CAMEO -> ISO3
     work["iso3"] = to_iso3(work["ActionGeo_CountryCode"])
     work["actor1"] = actor_to_iso3(work["Actor1CountryCode"])
     work["actor2"] = actor_to_iso3(work["Actor2CountryCode"])
@@ -202,8 +201,7 @@ def _prepare(events: pd.DataFrame) -> _Prepared:
 
     # --- 3. Date: first 8 characters of DATEADDED (YYYYMMDDHHMMSS) ---
 
-    # errors="coerce" turns anything that is not a real date into a
-    # missing value, so one bad row cannot stop the run.
+    # errors="coerce" converts malformed dates into missing values
     work["date"] = pd.to_datetime(
         work["DATEADDED"].astype("string").str.slice(0, 8),
         format="%Y%m%d",
@@ -219,8 +217,7 @@ def _prepare(events: pd.DataFrame) -> _Prepared:
     work["actor2_igo"] = _has_type(work, "2", IGO_TYPE_CODE)
 
     # An actor is "foreign" when it has a country code that is not the
-    # location, or is an intergovernmental organisation. A blank code is
-    # not foreign. A code that is not a country (e.g. EUR) is foreign.
+    # location, or is an IGO (a blank code is not foreign)
     actor1_blank = clean_actor_codes(work["Actor1CountryCode"]) == ""
     actor2_blank = clean_actor_codes(work["Actor2CountryCode"]) == ""
     actor1_local = (work["actor1"] == work["iso3"]).fillna(False)
@@ -247,6 +244,7 @@ def _prepare(events: pd.DataFrame) -> _Prepared:
         "bad_date": int(bad_date.sum()),
         "rows_used": int(work["iso3"].notna().sum()),
     }
+
     return _Prepared(work=work, dropped=dropped, unmatched=unmatched)
 
 
@@ -267,48 +265,33 @@ def _criterion_sums(
     for name, flag in flags.items():
         flag = flag.fillna(False).astype(bool)
         work[f"{name}_events"] = flag.astype("int64")
+
         # Articles and Goldstein count only where the flag is True
         work[f"{name}_articles"] = frame["NumArticles"].where(flag, 0)
         work[f"{name}_goldstein"] = frame["_goldstein"].where(flag, 0.0)
+
     return work.groupby(keys).sum()
 
 
 def to_country_day(events: pd.DataFrame) -> pd.DataFrame:
     """
-    Aggregate event rows into a country-day table.
+    Summarise GDELT events for each country and day.
 
-    Output columns:
-        iso3, date          the country and the day (UTC)
+    Includes:
+        - Total events, mentions and articles.
+        - Average event tone and Goldstein scores.
+        - Event counts by QuadClass and CAMEO root code.
+        - Domestic unrest and media pressure measures.
+        - International conflict and cooperation measures.
 
-      By location (events that happened in the country):
-        n_events            number of events
-        n_mentions          total mentions of those events
-        n_articles          total articles about those events
-        tone_mean           plain average of AvgTone
-        tone_mean_weighted  average of AvgTone, weighted by NumArticles
-        goldstein_mean      plain average of GoldsteinScale
-        quad_1 .. quad_4    number of events in each QuadClass
-        root_01 .. root_20  number of events with each CAMEO root code
-        root_other          events whose root code is not one of the 20
-        unrest_*            root 14, 18, 19 or 20; relation "domestic";
-                            target not media
-        unrest_loose_*      the same, plus root 17 (coerce)
-        media_pressure_*    pressure events whose target is media
+    Each criterion has three measures: event count, article count
+    and Goldstein total.
 
-      By actor (events the country took part in):
-        actor_*             all events with this country as an actor
-        intl_conflict_*     conflict events with a different country, or
-                            with an intergovernmental organisation (IGO)
-        intl_coop_*         cooperation events, on the same basis
+    Countries involved in events are included even if no events
+    were located inside their borders.
 
-    Each * is stored as _events, _articles and _goldstein.
-
-    A country with actor events but no located events still gets a row,
-    with n_events = 0 and missing averages.
-
-    The returned table carries two records in table.attrs:
-        "dropped"                what was left out of the location measures
-        "actor_codes_unmatched"  actor codes that are not a known country
+    Information about excluded rows and unmatched actor codes is
+    stored in table.attrs.
     """
     prepared = _prepare(events)
     work = prepared.work
@@ -318,11 +301,12 @@ def to_country_day(events: pd.DataFrame) -> pd.DataFrame:
     target_is_media = work["media_target"]
 
 
-    # --- Location measures: events that happened in the country ---
+    # --- Events that happened inside each country ---
 
     located = work[work["iso3"].notna()].copy()
     keys = ["iso3", "date"]
 
+    # Calculate daily event totals and averages.
     table = located.groupby(keys).agg(
         n_events=("GlobalEventID", "size"),
         n_mentions=("NumMentions", "sum"),
@@ -331,19 +315,18 @@ def to_country_day(events: pd.DataFrame) -> pd.DataFrame:
         goldstein_mean=("GoldsteinScale", "mean"),
     )
 
-    # Tone weighted by number of articles:
-    #   weighted mean = sum(tone * articles) / sum(articles)
-    # An event with no tone value gets weight 0 so it does not count.
+    # Calculate average tone weighted by article counts.
+    # Events without a tone value receive no weight.
     weight = located["NumArticles"].where(located["AvgTone"].notna(), 0)
     located["_tone_x_weight"] = located["AvgTone"] * weight
     located["_weight"] = weight
     sums = located.groupby(keys)[["_tone_x_weight", "_weight"]].sum()
     table["tone_mean_weighted"] = sums["_tone_x_weight"] / sums["_weight"]
 
-    # Event counts per QuadClass and per CAMEO root code.
-    # crosstab counts the rows in each (country-day, code) cell. reindex
-    # makes sure every column exists, even if a code did not occur.
+    # Count events by QuadClass and CAMEO root code.
+    # Include all possible codes, even when their count is zero.
     index = [located["iso3"], located["date"]]
+
     quad_counts = pd.crosstab(index, located["QuadClass"])
     quad_counts = quad_counts.reindex(columns=QUAD_CLASSES, fill_value=0)
     quad_counts.columns = [f"quad_{q}" for q in QUAD_CLASSES]
@@ -352,22 +335,20 @@ def to_country_day(events: pd.DataFrame) -> pd.DataFrame:
     root_counts = root_counts.reindex(columns=ROOT_CODES, fill_value=0)
     root_counts.columns = [f"root_{code}" for code in ROOT_CODES]
 
-    # A country-day whose events all lack a class or root code would be
-    # missing from the crosstab, so line both up with the main table.
+    # Keep all country-days, including those with missing event codes.
     quad_counts = quad_counts.reindex(table.index, fill_value=0)
     root_counts = root_counts.reindex(table.index, fill_value=0)
     table = table.join(quad_counts).join(root_counts)
 
-    # Events with a missing or unusual root code, so that nothing is lost:
-    # n_events == root_01 + ... + root_20 + root_other
+    # Count events with missing or unrecognised root codes.
     table["root_other"] = table["n_events"] - root_counts.sum(axis=1)
 
-    # Unrest counts domestic events only, and leaves out events aimed at
-    # media, so that a journalist's arrest is not counted both here and in
-    # media_pressure.
+    # Exclude media-targeted events from unrest to avoid double counting.
     domestic_not_media = (
         (work["relation"] == RELATION_DOMESTIC) & ~target_is_media
     )
+
+    # Calculate unrest and media-pressure measures.
     location_sums = _criterion_sums(
         located,
         keys,
@@ -384,19 +365,10 @@ def to_country_day(events: pd.DataFrame) -> pd.DataFrame:
     table = table.join(location_sums)
 
 
-    # --- Actor measures: events the country took part in ---
+    # --- Events involving each country ---
 
-    # One row per (event, country taking part). An event between two
-    # different countries gives two rows, one for each. An event where
-    # both actors are the same country gives one row.
-    #
-    # For each country taking part, the event is international when the
-    # other actor is a different country, or is an intergovernmental
-    # organisation (typed IGO: the UN, NATO, ECOWAS ...). An organisation
-    # event counts once for the country only; it is not split among the
-    # organisation's members. Plain region names ("Africa") and
-    # non-governmental organisations do not count.
-
+    # Create one record for each country involved in an event.
+    # If both actors are the same country, keep only one record.
     different = (work["actor1"] != work["actor2"]).fillna(False)
     both_countries = work["actor1"].notna() & work["actor2"].notna()
 
@@ -411,11 +383,13 @@ def to_country_day(events: pd.DataFrame) -> pd.DataFrame:
         iso3=work["actor2"],
         international=(both_countries & different) | work["actor1_igo"],
     )
+
     taking_part = pd.concat([first, second], ignore_index=True)
     taking_part = taking_part.drop_duplicates(
         subset=["GlobalEventID", "iso3"], ignore_index=True
     )
 
+    # Count international conflict and cooperation events.
     is_cross_border = taking_part["international"].astype(bool)
     part_quad = taking_part["QuadClass"]
     actor_sums = _criterion_sums(
@@ -433,13 +407,12 @@ def to_country_day(events: pd.DataFrame) -> pd.DataFrame:
     )
 
 
-    # --- Put the two together ---
+    # --- Combine location and actor measures ---
 
-    # how="outer" keeps a country that appears on only one side.
+    # Keep countries that appear in either set of measures.
     table = table.join(actor_sums, how="outer")
 
-    # A country on only one side has no value for the other side's counts
-    # and sums (for a count or a sum, "no value" = zero)
+    # Replace missing counts and sums with zero.
     int_columns = (
         ["n_events", "n_mentions", "n_articles"]
         + list(quad_counts.columns)
@@ -447,12 +420,15 @@ def to_country_day(events: pd.DataFrame) -> pd.DataFrame:
         + ["root_other"]
         + [c for c in criterion_columns() if not c.endswith("_goldstein")]
     )
+
     goldstein_columns = [
         c for c in criterion_columns() if c.endswith("_goldstein")
     ]
+
     table[int_columns] = table[int_columns].fillna(0).astype("int64")
     table[goldstein_columns] = table[goldstein_columns].fillna(0.0)
 
+    # Arrange columns and sort by date and country.
     column_order = (
         ["n_events", "n_mentions", "n_articles",
          "tone_mean", "tone_mean_weighted", "goldstein_mean"]
@@ -461,40 +437,50 @@ def to_country_day(events: pd.DataFrame) -> pd.DataFrame:
         + ["root_other"]
         + criterion_columns()
     )
+
     table = table[column_order].reset_index()
     table = table.sort_values(["date", "iso3"], ignore_index=True)
 
+    # Attach information about excluded rows and unmatched actor codes.
     table.attrs["dropped"] = prepared.dropped
     table.attrs["actor_codes_unmatched"] = prepared.unmatched
+
     return table
 
 
 def to_event_code_day(events: pd.DataFrame) -> pd.DataFrame:
     """
-    Aggregate located events by full CAMEO event code.
+    Summarise located events by full CAMEO event code.
 
-    One row per (iso3, date, event_code, relation, media_target), for
-    every combination that occurred. Columns: n_events, n_articles,
-    goldstein_sum. media_target is 1 when the target is coded as media.
+    One row per country, day, event code, actor relationship and
+    media-target status.
 
-    relation says how the actors relate to the location:
-        "domestic"    actor 1 is local; actor 2 is local or absent
-        "no_country"  no foreign actor, but not "domestic" (e.g. both blank)
-        "foreign"     at least one actor is foreign
+    Columns:
+        n_events       number of events
+        n_articles     total number of articles
+        goldstein_sum  sum of GoldsteinScale values
 
-    So, for example, the strict unrest count in to_country_day() equals the
-    sum of n_events over rows whose relation is "domestic", whose
-    media_target is 0, and whose code starts with an unrest root code. The
-    tests check this.
+    relation describes how the event's actors relate to the country:
+        domestic    actor 1 is local; actor 2 is local or absent
+        no_country  no foreign actor, but not domestic
+        foreign     at least one actor is foreign
 
-    Only located events are included, the same ones as n_events in
-    to_country_day(). A missing event code is stored as "".
+    Only events with a country location are included. Missing event
+    codes are stored as an empty string.
+
+    The table preserves the detail needed to check the event counts
+    used in to_country_day().
     """
+
+    # Prepare events and keep only those with a country location
     work = _prepare(events).work
     located = work[work["iso3"].notna()].copy()
+
+    # Standardise event codes and media-target flags
     located["event_code"] = located["EventCode"].fillna("").astype(str)
     located["media_target"] = located["media_target"].astype("int64")
 
+    # Group by country, day, event code and actor relationship
     keys = ["iso3", "date", "event_code", "relation", "media_target"]
     table = located.groupby(keys).agg(
         n_events=("GlobalEventID", "size"),
@@ -502,7 +488,9 @@ def to_event_code_day(events: pd.DataFrame) -> pd.DataFrame:
         goldstein_sum=("_goldstein", "sum"),
     ).reset_index()
 
+    # Store counts as integers and keep the defined column order
     table["n_events"] = table["n_events"].astype("int64")
     table["n_articles"] = table["n_articles"].astype("int64")
     table = table[EVENT_CODE_COLUMNS]
+
     return table.sort_values(keys, ignore_index=True)
