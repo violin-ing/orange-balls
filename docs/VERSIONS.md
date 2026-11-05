@@ -37,9 +37,6 @@ the one the results were produced from.
 | Licence | CC BY-SA 4.0 |
 | Used for | `v2mecenefm` (government censorship effort, media), `v2meharjrn` (harassment of journalists), internet shutdown capacity (variable name to confirm against the codebook) |
 
-Why Full+Others and not Core: the internet shutdown variable comes from the
-Digital Society Project and may not be in the Core file.
-
 ### WGI (Worldwide Governance Indicators)
 
 | Field | Value |
@@ -55,9 +52,20 @@ Digital Society Project and may not be in the Core file.
 | Licence | CC BY 4.0 |
 | Used for | Government Effectiveness, Political Stability and Absence of Violence/Terrorism (estimates and standard errors) |
 
-Note: this edition follows the 2025 WGI methodology revision, so its values
-are not directly comparable with editions before 2025.
+### World Bank
 
+| Field | Value |
+|---|---|
+| Dataset | World Bank World Development Indicators (WDI), NY.GDP.PCAP.PP.KD: GDP per capita, PPP (constant 2021 international $) |
+| Edition | WDI, last updated 2026-10-08 (from line 3 of the API file); data years 1990 to 20XX |
+| Format | CSV (zip of 3 files: values, country metadata, indicator metadata) |
+| Downloaded | 2026-11-05 |
+| Source | https://api.worldbank.org/v2/en/indicator/NY.GDP.PCAP.PP.KD?downloadformat=csv |
+| Saved to | `data/reference/worldbank/` |
+| File name | `API_NY.GDP.PCAP.PP.KD_DS2_en_csv_v2_1629.csv` (plus its `Metadata_Country_…csv`) |
+| SHA-256 | 35ddabcb95a270a58b5db32eb547f0326c91f9652d1329e4b877abe1ec928411 |
+| Licence | CC BY 4.0 |
+| Used for | Validation only |
 ---
 
 ## Live dataset (pulled by code)

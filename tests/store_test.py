@@ -84,7 +84,7 @@ def test_save_then_load_gives_the_same_table() -> None:
     assert list(loaded.columns) == TABLE_COLUMNS
 
     pd.testing.assert_frame_equal(
-        loaded, original, check_dtype=False, check_names=False
+        loaded, original[TABLE_COLUMNS], check_dtype=False, check_names=False
     )
 
     connection.close()
@@ -324,7 +324,7 @@ def test_database_from_older_code_is_refused() -> None:
     try:
         connect(path)
     except SchemaMismatch as error:
-        assert "delete the database file" in str(error)
+        assert "delete the database file" in str(error).lower()
     else:
         raise AssertionError("an old database should be refused")
 

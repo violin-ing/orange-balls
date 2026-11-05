@@ -54,7 +54,10 @@ HEADER_LINES = 4
 
 # Drop economies with no ISO3 equivalent
 DROPPED: dict[str, str] = {
-    "CHI": "Channel Islands (GDELT and WGI have Jersey and Guernsey)",
+    "CHI": "Channel Islands",
+    "CUW": "Curacao",
+    "SXM": "Sint Maarten (Dutch part)",
+    "INX": "Not classified",
 }
 
 

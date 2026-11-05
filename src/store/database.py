@@ -229,7 +229,7 @@ def connect(path: Path | str = DB_PATH) -> sqlite3.Connection:
             row[1]
             for row in connection.execute(f"PRAGMA table_info({table_name})")
         ]
-        if found != columns:
+        if sorted(found) != sorted(columns):
             connection.close()
             raise SchemaMismatch(
                 f"{path}: table {table_name} has different columns from "
@@ -278,12 +278,16 @@ def save_day(
 
     Returns the number of country rows written.
     """
-    if list(table.columns) != TABLE_COLUMNS:
+    if (sorted(table.columns) != sorted(TABLE_COLUMNS)
+        or len(table.columns) != len(TABLE_COLUMNS)):
         raise ValueError(
             "table columns do not match the database. "
             f"Missing: {sorted(set(TABLE_COLUMNS) - set(table.columns))}, "
             f"unexpected: {sorted(set(table.columns) - set(TABLE_COLUMNS))}"
         )
+    attrs = table.attrs
+    table = table[TABLE_COLUMNS]
+    table.attrs = attrs
     
     if codes is not None and list(codes.columns) != EVENT_CODE_COLUMNS:
         raise ValueError(
