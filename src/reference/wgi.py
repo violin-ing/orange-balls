@@ -7,8 +7,16 @@ src/reference/variables.py are read.
 
 Things to note:
     - Missing values are written as "..".
-    - Uncertainty: "Standard error (estimate)" and a 90% interval
-      ("Lower/Upper threshold (90% conf. int. estimate)").
+    - Two scales are published. The estimate (about -2.5 to +2.5) is
+      centred on each year's global average, so it is relative. The
+      governance score (0-100) is the same estimate anchored to two fixed
+      benchmark countries, so it is comparable across years. The score is
+      used (2025 methodology revision, section 4.1).
+    - Uncertainty: "Standard error (gov. score)". The file gives a 90%
+      interval only for the estimate; the score is a straight-line
+      rescaling of it, so its 90% interval is score -+ 1.645 x standard
+      error (checked: the estimate's published interval is estimate -+
+      1.645 x its standard error).
     - Years are not continuous: 1996, 1998, 2000, then every year from
       2002.
     - The "with source data" edition also lists which outside sources
@@ -32,11 +40,10 @@ from src.reference.variables import variables_from
 CODE = "Economy (code)"
 NAME = "Economy (name)"
 YEAR = "Year"
-ESTIMATE = "Governance estimate (approx. -2.5 to +2.5)"
-STD_ERROR = "Standard error (estimate)"
-LOWER = "Lower threshold (90% conf. int. estimate)"
-UPPER = "Upper threshold (90% conf. int. estimate)"
+SCORE = "Governance score (0-100)"
+SCORE_ERROR = "Standard error (gov. score)"
 INTERVAL = 0.90
+Z_90 = 1.6448536269514722     # normal quantile for a 90% interval
 
 # Codes in the file that are not countries this project scores
 DROPPED: dict[str, str] = {
@@ -60,7 +67,7 @@ def load_wgi(path: Path | str, min_year: int = 2000) -> pd.DataFrame:
             keep_default_na=False,
             na_values=[".."],
         )
-        needed = [CODE, NAME, YEAR, ESTIMATE, STD_ERROR, LOWER, UPPER]
+        needed = [CODE, NAME, YEAR, SCORE, SCORE_ERROR]
         missing = [c for c in needed if c not in sheet.columns]
         if missing:
             raise ValueError(
@@ -73,15 +80,17 @@ def load_wgi(path: Path | str, min_year: int = 2000) -> pd.DataFrame:
         keep = check_codes(sheet[CODE], sheet[NAME], DROPPED, "WGI")
         sheet = sheet[keep]
 
+        score = pd.to_numeric(sheet[SCORE], errors="coerce")
+        error = pd.to_numeric(sheet[SCORE_ERROR], errors="coerce")
         frames.append(pd.DataFrame({
             "iso3": sheet[CODE],
             "year": sheet[YEAR].astype("int64"),
             "variable": variable.name,
             "source": "wgi",
-            "value": pd.to_numeric(sheet[ESTIMATE], errors="coerce"),
-            "sd": pd.to_numeric(sheet[STD_ERROR], errors="coerce"),
-            "low": pd.to_numeric(sheet[LOWER], errors="coerce"),
-            "high": pd.to_numeric(sheet[UPPER], errors="coerce"),
+            "value": score,
+            "sd": error,
+            "low": score - Z_90 * error,
+            "high": score + Z_90 * error,
             "interval": INTERVAL,
         }))
 

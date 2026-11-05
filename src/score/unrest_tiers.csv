@@ -1,0 +1,7 @@
+code_prefix,tier,label,reason
+14,1,Protest (non-violent),"CAMEO root 14: demonstrations, strikes, boycotts, blockades"
+145,2,Violent protest or riot,"CAMEO 145, the only violent sub-code of root 14"
+17,2,Coerce,"CAMEO root 17 (loose unrest set only): arrests, repression, seizures"
+18,3,Assault,"CAMEO root 18: physical attacks short of armed fighting"
+19,3,Fight,"CAMEO root 19: use of conventional military force"
+20,4,Unconventional mass violence,"CAMEO root 20: mass killings, ethnic cleansing"

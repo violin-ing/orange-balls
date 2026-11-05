@@ -4,8 +4,10 @@ Loads the V-Dem and WGI files into the database. Run from the repo root:
     python3 -m src.load_reference
     python3 -m src.load_reference --year 2024     (coverage report year)
 
-By default it reads the one CSV in data/reference/vdem/ and the one Excel
-file in data/reference/wgi/. Use --vdem and --wgi to give other paths.
+By default it reads the one CSV in data/reference/vdem/, the one Excel
+file in data/reference/wgi/ and, if present, the World Bank GDP per capita
+download in data/reference/worldbank/ (API_*.csv plus its
+Metadata_Country_*.csv). Use --vdem, --wgi and --wb to give other paths.
 
 What it does:
     1. Works out each file's SHA-256 checksum and checks it is recorded in
@@ -32,6 +34,7 @@ from src.reference.common import UnknownReferenceCode
 from src.reference.select import for_year, join_reference
 from src.reference.vdem import load_vdem
 from src.reference.wgi import load_wgi
+from src.reference.worldbank import load_worldbank
 from src.store.database import (
     DB_PATH,
     connect,
@@ -42,6 +45,7 @@ from src.store.database import (
 
 VDEM_DIR = Path("data/reference/vdem")
 WGI_DIR = Path("data/reference/wgi")
+WB_DIR = Path("data/reference/worldbank")
 VERSIONS = Path("docs/VERSIONS.md")
 
 
@@ -90,6 +94,8 @@ def main() -> None:
     )
     parser.add_argument("--vdem", type=Path, help="path to the V-Dem CSV")
     parser.add_argument("--wgi", type=Path, help="path to the WGI Excel")
+    parser.add_argument("--wb", type=Path,
+                        help="path to the World Bank API_*.csv (optional)")
     parser.add_argument(
         "--year", type=int, default=2025,
         help="reference year for the GDELT coverage report (default 2025)",
@@ -100,7 +106,12 @@ def main() -> None:
         "vdem": args.vdem or only_file(VDEM_DIR, "*.csv"),
         "wgi": args.wgi or only_file(WGI_DIR, "*.xlsx"),
     }
-    loaders = {"vdem": load_vdem, "wgi": load_wgi}
+    wb = args.wb or next(iter(sorted(WB_DIR.glob("API_*.csv"))), None)
+    if wb is not None:
+        files["wb"] = wb
+    else:
+        print(f"no World Bank file in {WB_DIR}; GDP per capita not loaded")
+    loaders = {"vdem": load_vdem, "wgi": load_wgi, "wb": load_worldbank}
 
     tables: dict[str, pd.DataFrame] = {}
     for source, path in files.items():

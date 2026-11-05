@@ -37,7 +37,9 @@ class UnknownReferenceCode(ValueError):
 
 
 def known_iso3() -> set[str]:
-    """Every ISO3 code this project uses (the GDELT crosswalk's codes)."""
+    """
+    Every ISO3 code this project uses (the GDELT crosswalk's codes).
+    """
     return set(load_crosswalk().values())
 
 
@@ -76,7 +78,9 @@ def check_codes(
 
 
 def check_unique(table: pd.DataFrame, source: str) -> None:
-    """Each (iso3, year, variable) must appear once."""
+    """
+    Each (iso3, year, variable) must appear once.
+    """
     repeats = table.duplicated(["iso3", "year", "variable"], keep=False)
     if repeats.any():
         sample = table.loc[repeats, ["iso3", "year", "variable"]].head(6)

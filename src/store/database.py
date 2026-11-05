@@ -14,6 +14,8 @@ Tables:
                     variable (from src/reference)
     reference_file  which reference file each source was loaded from, with
                     its SHA-256 checksum
+    norm_bounds     fixed normalisation bounds per criterion (from
+                    src/score/bounds.py, saved by src.compute_bounds)
 
 Things to note:
     - Saving a day that is already stored replaces it. Nothing is duplicated.
@@ -71,6 +73,13 @@ LOG_COLUMNS: list[str] = [
 
 REFERENCE_FILE_COLUMNS: list[str] = [
     "source", "file_name", "sha256", "loaded_at", "rows",
+]
+
+# Defined here so the store does not depend on the scoring code;
+# src/score/bounds.py imports it.
+BOUNDS_COLUMNS: list[str] = [
+    "criterion", "variant", "lower", "upper", "mean", "sd", "method",
+    "reference_start", "reference_end", "computed_at",
 ]
 
 
@@ -157,6 +166,21 @@ def connect(path: Path | str = DB_PATH) -> sqlite3.Connection:
             rows INTEGER NOT NULL
         )
     """)
+    connection.execute("""
+        CREATE TABLE IF NOT EXISTS norm_bounds (
+            criterion TEXT NOT NULL,
+            variant TEXT NOT NULL,
+            lower REAL NOT NULL,
+            upper REAL NOT NULL,
+            mean REAL NOT NULL,
+            sd REAL NOT NULL,
+            method TEXT NOT NULL,
+            reference_start TEXT NOT NULL,
+            reference_end TEXT NOT NULL,
+            computed_at TEXT NOT NULL,
+            PRIMARY KEY (criterion, variant)
+        )
+    """)
     connection.commit()
 
     # CREATE TABLE IF NOT EXISTS leaves an existing table alone, so a file
@@ -168,6 +192,7 @@ def connect(path: Path | str = DB_PATH) -> sqlite3.Connection:
         "pull_log": LOG_COLUMNS,
         "reference": REFERENCE_COLUMNS,
         "reference_file": REFERENCE_FILE_COLUMNS,
+        "norm_bounds": BOUNDS_COLUMNS,
     }
     for table_name, columns in expected.items():
         found = [
@@ -458,3 +483,45 @@ def load_reference_files(connection: sqlite3.Connection) -> pd.DataFrame:
         "ORDER BY source"
     )
     return pd.read_sql_query(query, connection)
+
+
+def save_bounds(connection: sqlite3.Connection, table: pd.DataFrame) -> int:
+    """
+    Store normalisation bounds. A row replaces any stored row for the same
+    criterion and variant; other rows are kept.
+    """
+    if list(table.columns) != BOUNDS_COLUMNS:
+        raise ValueError(
+            f"bounds table columns should be {BOUNDS_COLUMNS}, "
+            f"got {list(table.columns)}"
+        )
+    bad = table[~(table["upper"] > table["lower"])]
+    if not bad.empty:
+        raise ValueError(
+            "upper bound not above lower bound:\n"
+            f"{bad[['criterion', 'lower', 'upper']].to_string(index=False)}"
+        )
+    rows = table.astype(object).where(table.notna(), None)
+    query = (
+        f"INSERT OR REPLACE INTO norm_bounds ({', '.join(BOUNDS_COLUMNS)}) "
+        f"VALUES ({', '.join('?' for _ in BOUNDS_COLUMNS)})"
+    )
+    with connection:
+        connection.executemany(query, rows.itertuples(index=False, name=None))
+    return len(rows)
+
+
+def load_bounds(
+        connection: sqlite3.Connection,
+        variants: list[str] | None = None,
+    ) -> pd.DataFrame:
+    """Stored bounds, optionally for some variants only."""
+    where, values = "", []
+    if variants is not None:
+        where = f"WHERE variant IN ({', '.join('?' for _ in variants)})"
+        values = list(variants)
+    query = (
+        f"SELECT {', '.join(BOUNDS_COLUMNS)} FROM norm_bounds {where} "
+        "ORDER BY criterion, variant"
+    )
+    return pd.read_sql_query(query, connection, params=values)

@@ -19,13 +19,16 @@ from datetime import date
 import pandas as pd
 
 from src.store.database import (
+    BOUNDS_COLUMNS,
     DB_PATH,
     TABLE_COLUMNS,
     SchemaMismatch,
     connect,
+    load_bounds,
     load_country_day,
     load_event_codes,
     load_pull_log,
+    save_bounds,
     save_day,
 )
 from src.transform.aggregate import to_country_day, to_event_code_day
@@ -57,7 +60,7 @@ def test_tables_are_created() -> None:
     )}
     assert names == {
         "country_day", "event_code_day", "pull_log",
-        "reference", "reference_file",
+        "reference", "reference_file", "norm_bounds",
     }, names
     connection.close()
 
@@ -220,6 +223,39 @@ def test_event_codes_from_another_day_are_refused() -> None:
     connection.close()
 
 
+def bounds_rows(rows: list[tuple]) -> pd.DataFrame:
+    """rows: (criterion, variant, lower, upper)"""
+    return pd.DataFrame([
+        {"criterion": c, "variant": v, "lower": lo, "upper": hi,
+         "mean": (lo + hi) / 2, "sd": 1.0, "method": "theoretical",
+         "reference_start": "2000", "reference_end": "2024",
+         "computed_at": "2026-11-03T00:00:00+00:00"}
+        for c, v, lo, hi in rows
+    ], columns=BOUNDS_COLUMNS)
+
+
+def test_bounds_are_saved_and_replaced_per_variant() -> None:
+    connection = connect(":memory:")
+    save_bounds(connection, bounds_rows([
+        ("wgi_ge", "-", 0.0, 100.0), ("unrest", "abc", 0.0, 3.0),
+        ("unrest", "def", 0.0, 5.0),
+    ]))
+    save_bounds(connection, bounds_rows([("unrest", "abc", 0.0, 4.0)]))
+    stored = load_bounds(connection)
+    assert len(stored) == 3                       # replaced, not added
+    picked = load_bounds(connection, ["-", "abc"])
+    assert picked[["criterion", "upper"]].values.tolist() == [
+        ["unrest", 4.0], ["wgi_ge", 100.0],
+    ]
+    try:
+        save_bounds(connection, bounds_rows([("x", "-", 1.0, 1.0)]))
+    except ValueError as error:
+        assert "not above" in str(error)
+    else:
+        raise AssertionError("upper == lower should be refused")
+    connection.close()
+
+
 def test_database_from_older_code_is_refused() -> None:
     """An old file must give a clear message, not a confusing SQL error."""
     import tempfile
@@ -306,6 +342,7 @@ def main() -> None:
         test_database_refuses_duplicate_country_day,
         test_event_codes_are_saved_and_replaced,
         test_event_codes_from_another_day_are_refused,
+        test_bounds_are_saved_and_replaced_per_variant,
         test_database_from_older_code_is_refused,
     ]
     for test in tests:

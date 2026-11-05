@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import pandas as pd
 
-from src.reference.variables import VARIABLES
+from src.reference.variables import VARIABLES, with_role
 
 
 def for_year(reference: pd.DataFrame, year: int) -> pd.DataFrame:
@@ -51,11 +51,12 @@ def join_reference(
 
     Every country-day row is kept. A country with no reference data gets
     missing values, and the number of such countries is recorded in
-    table.attrs["reference_coverage"].
+    table.attrs["reference_coverage"]. Coverage counts the default
+    criteria only, not candidates or validation variables.
     """
     joined = country_day.merge(reference_year, on="iso3", how="left")
 
-    names = list(VARIABLES)
+    names = with_role("criterion")
     has_all = joined[names].notna().all(axis=1)
     countries = joined["iso3"].nunique()
     without_any = joined.loc[joined[names].isna().all(axis=1), "iso3"]

@@ -13,21 +13,21 @@ scores or levels. Those belong to the scoring layer, so the scoring design
 can change without touching this code.
 
 A country gets measures in two different ways:
-    - by LOCATION: events that happened in the country
-      (ActionGeo_CountryCode). Used for totals, tone, unrest and pressure
-      on media.
+    - by LOCATION: events that happened in the country (ActionGeo_CountryCode).
+      Used for totals, tone, unrest and pressure on media.
     - by ACTOR: events the country took part in, wherever they happened
-      (Actor1CountryCode, Actor2CountryCode). Used for international
-      conflict and cooperation.
+      (Actor1CountryCode, Actor2CountryCode). Used for international conflict 
+      and cooperation.
 
 Severity:
-    GDELT gives no severity for a single event. GoldsteinScale is fixed by
-    the CAMEO event code (a riot is always the same value, however many
-    were hurt), so it measures how severe that TYPE of event usually is.
+    GDELT gives no severity for a single event. GoldsteinScale is fixed by the 
+    CAMEO event code (a riot is always the same value, however many were hurt),
+    so it measures how severe that TYPE of event usually is.
+
     Two things are stored so that severity can be applied in scoring:
-    - a Goldstein sum next to every criterion count (<name>_goldstein)
-    - the full event code table, so criteria can be defined at the level
-      of e.g. "violent protest" (145) rather than "protest" (14)
+        - a Goldstein sum next to every criterion count (<name>_goldstein)
+        - the full event code table, so criteria can be defined at the level
+        of e.g. "violent protest" (145) rather than "protest" (14)
 
 Things to note:
     - The date is the day GDELT recorded the event (DATEADDED, in UTC),
