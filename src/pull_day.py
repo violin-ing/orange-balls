@@ -1,25 +1,25 @@
 """
-Pulls GDELT events for one day or a range of days, aggregates them, and
-saves the country-day table. Run from the repo root:
+Pull GDELT events for one day or a date range, aggregate them and
+save the results to the database.
 
-    python3 -m src.pull_day                     (yesterday, in UTC)
-    python3 -m src.pull_day --date 2026-10-09   (a chosen day)
+Run from the project root:
+    python3 -m src.pull_day
+    python3 -m src.pull_day --date 2026-10-09
     python3 -m src.pull_day --from 2026-10-01 --to 2026-10-09
-    python3 -m src.pull_day --days 90           (the last 90 full days)
+    python3 -m src.pull_day --days 90
 
-Other options:
-    --force     pull a day again even if it is already stored
-    --no-save   print the summary without saving to the database
+Options:
+    --force    pull days again even if already stored
+    --no-save  print summaries without saving to the database
 
-What it does for each day:
-    1. Selects the export files for that day (a full day is 96 files)
-    2. Downloads each one into the cache, skipping any that fail
-    3. Reads them and builds the country-day table
-    4. Prints a summary (a full one for one day, one line per day for
-       a range)
-    5. Saves the table to the database
+For each day, the script:
+    1. Finds the available export files (96 for a full day).
+    2. Downloads the files, skipping any that fail.
+    3. Reads and aggregates the events.
+    4. Prints a summary.
+    5. Saves the results, unless --no-save is used.
 
-A day that is already stored as complete is skipped.
+Days already stored as complete are skipped unless --force is used.
 """
 
 from __future__ import annotations
@@ -71,12 +71,15 @@ def explain_unknown_codes(
         events: pd.DataFrame,
         error: UnknownCountryCode,
     ) -> None:
-    """Print each unknown country code with the places GDELT attached to it."""
+    """
+    Show unknown location codes and the place names GDELT uses for them.
+    """
     print(f"\nSTOPPED: {error}")
     print("\nMost common place names for each unknown code:")
 
     recognised = set(load_crosswalk()) | NON_COUNTRY_CODES | {""}
     codes = events["ActionGeo_CountryCode"].fillna("").str.strip().str.upper()
+
     for code in sorted(set(codes.unique()) - recognised):
         names = events.loc[codes == code, "ActionGeo_FullName"]
         places = names.value_counts().head(3)
@@ -91,11 +94,7 @@ def print_unmatched_actor_codes(
         limit: int = 15,
     ) -> None:
     """
-    Print the most common actor codes that are not a known country, each
-    with the actor name seen most often.
-
-    Most of these are regions or groups and need no action. A real country
-    in this list should be added to src/countries/cameo_iso3.csv.
+    Show the most common actor codes that are not recognised countries.
     """
     total = sum(unmatched.values())
     print(f"\n--- actor codes that are not a known country "
@@ -105,21 +104,21 @@ def print_unmatched_actor_codes(
         "Actor1CountryCode": "Actor1Name",
         "Actor2CountryCode": "Actor2Name",
     }
+
     for code, count in list(unmatched.items())[:limit]:
         names: list[pd.Series] = []
+
         for code_column, name_column in code_columns.items():
             matches = clean_actor_codes(events[code_column]) == code
             names.append(events.loc[matches, name_column])
         common = pd.concat(names).value_counts().head(2)
+
         print(f"  {code}: {count:>6,}  e.g. {list(common.index)}")
 
 
 def print_unrest_by_code(codes: pd.DataFrame, limit: int = 10) -> None:
     """
-    Print the most common full event codes within loose unrest (domestic,
-    not aimed at media), with their average Goldstein value. This shows
-    the detail that the root code alone hides, e.g. demonstrations (141)
-    against riots (145), or arrests (173) inside root 17.
+    Show the most common full event codes counted as domestic unrest.
     """
     is_unrest = codes["event_code"].str[:2].isin(UNREST_LOOSE_ROOT_CODES)
     domestic = codes[
@@ -127,6 +126,7 @@ def print_unrest_by_code(codes: pd.DataFrame, limit: int = 10) -> None:
         & (codes["relation"] == "domestic")
         & (codes["media_target"] == 0)
     ]
+
     by_code = domestic.groupby("event_code").agg(
         events=("n_events", "sum"), goldstein=("goldstein_sum", "sum")
     )
@@ -135,6 +135,7 @@ def print_unrest_by_code(codes: pd.DataFrame, limit: int = 10) -> None:
 
     print(f"\n--- event code table: {len(codes):,} rows; most common full "
           "codes in loose unrest ---")
+    
     print(top.to_string(float_format="{:.1f}".format))
 
 
@@ -145,22 +146,23 @@ def pull_one_day(
         verbose: bool,
     ) -> str:
     """
-    Pull, aggregate and save one day.
+    Download and process one day of GDELT events.
 
-    Returns "saved", "incomplete", "empty" or "stopped". "stopped" means
-    an unknown country code was found and the crosswalk needs a new row.
+    Returns "saved", "incomplete", "empty" or "stopped".
+    "stopped" means an unknown location country code was found.
     """
     started = time.perf_counter()
 
-    # 1. Which files exist for this day
+    # 1. Find the files available for this day
     files = select_day(index, target)
     if not files:
         print(f"{target}: no files listed (is the date in the future?)")
         return "empty"
 
-    # 2. Download + skip files that fail
+    # 2. Download the files, skipping any that fail
     paths: list[Path] = []
     skipped: list[str] = []
+
     for file in files:
         try:
             paths.append(download(file, CACHE_DIR))
@@ -173,7 +175,7 @@ def pull_one_day(
         print(f"{target}: nothing could be downloaded")
         return "empty"
 
-    # 3. Read and aggregate
+    # 3. Read the events and build both summary tables
     events = pd.concat(
         [read_events(path, READ_COLUMNS) for path in paths], ignore_index=True
     )
@@ -190,17 +192,19 @@ def pull_one_day(
     unmatched = table.attrs["actor_codes_unmatched"]
     countries = table["iso3"].nunique()
 
-    # 4. Print summary
+    # 4. Print the results and check whether the day is complete
     if verbose:
         print(f"{target}: {len(files)} of {FILES_PER_DAY} export files listed")
         print(f"files ready: {len(paths)}, skipped: {len(skipped)}")
         print(f"event rows read: {len(events):,}")
         print(f"dropped: {dropped}")
+
         no_country = dropped["no_country"] / dropped["rows_in"]
         print(f"rows with no usable country: {no_country:.1%}")
         print(f"country-day rows: {len(table)}, countries: {countries}")
 
         print("\n--- rows per date (expect one date) ---")
+
         per_date = table.groupby("date")["n_events"].agg(["count", "sum"])
         print(per_date.to_string())
 
@@ -209,6 +213,7 @@ def pull_one_day(
                    "unrest_goldstein", "media_pressure_events",
                    "intl_conflict_events", "intl_conflict_goldstein",
                    "intl_coop_events"]
+        
         top = table.sort_values("n_events", ascending=False).head(10)
         print(top[columns].to_string(
             index=False, float_format="{:.1f}".format
@@ -217,16 +222,19 @@ def pull_one_day(
         print_unrest_by_code(codes)
 
         print_unmatched_actor_codes(events, unmatched)
+
         print(f"\nevents with an unusual root code: "
               f"{table['root_other'].sum()}")
+        
         print(f"total time: {time.perf_counter() - started:.0f}s")
+
         if complete:
             print("\nFULL DAY PULL OK")
         else:
             print("\nNOTE: this is not a complete day, so the totals "
                   "are low.")
 
-    # 5. Save
+    # 5. Save the results (unless disabled)
     status = "saved" if complete else "incomplete"
     if connection is not None:
         written = save_day(
@@ -237,6 +245,7 @@ def pull_one_day(
         saved_text = "not saved (--no-save)"
 
     label = "complete day" if complete else "INCOMPLETE day"
+
     if verbose and connection is not None:
         print(f"{saved_text} for {target} to {DB_PATH} ({label})")
     elif verbose:
@@ -249,12 +258,13 @@ def pull_one_day(
             f"{saved_text} ({label}, "
             f"{time.perf_counter() - started:.0f}s)"
         )
+
     return status
 
 
 def days_to_pull(args: argparse.Namespace) -> list[date]:
     """
-    Work out the list of days asked for on the command line.
+    Return the dates requested by the command-line arguments.
     """
     yesterday = datetime.now(UTC).date() - timedelta(days=1)
 
@@ -273,6 +283,7 @@ def days_to_pull(args: argparse.Namespace) -> list[date]:
         raise SystemExit(f"the first day ({first}) is after the last ({last})")
 
     count = (last - first).days + 1
+
     return [first + timedelta(days=offset) for offset in range(count)]
 
 
@@ -311,7 +322,6 @@ def main() -> None:
     if sum(chosen) > 1:
         raise SystemExit("use only one of --date, --from/--to, --days")
 
-    # WARNING level keeps the output short; httpx logs every request at INFO
     logging.basicConfig(
         level=logging.WARNING, format="%(levelname)s %(message)s"
     )

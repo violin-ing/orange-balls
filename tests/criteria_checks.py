@@ -51,10 +51,10 @@ from src.transform.aggregate import (
 )
 
 CACHE_DIR = Path("data/cache/gdelt")
-MIN_EVENTS = 200          # countries with fewer located events are skipped
+MIN_EVENTS = 200 # countries with fewer located events are skipped
 ROOT19_COUNTRIES = ["USA", "GBR", "RUS", "ISR", "IND", "NGA"]
 SAMPLE = 8
-LOW_DATA = 50             # events a day, matches Settings.low_data_events
+LOW_DATA = 50 # events a day, matches Settings.low_data_events
 
 
 def check_actor_coding() -> None:
@@ -65,6 +65,7 @@ def check_actor_coding() -> None:
     connection = connect(DB_PATH)
     codes = load_event_codes(connection)
     connection.close()
+
     if codes.empty:
         print("no event code rows stored; run src.pull_day first")
         return
@@ -82,6 +83,7 @@ def check_actor_coding() -> None:
 
     print(f"countries with at least {MIN_EVENTS} located events: {len(big)}")
     print("share of located events coded 'domestic' (actor 1 local):")
+
     print(big["domestic_share"].describe(
         percentiles=[0.1, 0.25, 0.5, 0.75, 0.9]
     ).round(3).to_string())
@@ -101,20 +103,25 @@ def check_actor_coding() -> None:
         & (codes["relation"] == RELATION_DOMESTIC)
         & (codes["media_target"] == 0)
     ].groupby("iso3")["n_events"].sum()
+
     big["unrest"] = unrest.reindex(big.index, fill_value=0)
     big["share_all"] = big["unrest"] / big["total"]
     big["share_domestic"] = big["unrest"] / big["domestic"]
+
     rank_all = big["share_all"].rank(ascending=False)
     rank_domestic = big["share_domestic"].rank(ascending=False)
     big["rank_change"] = (rank_all - rank_domestic).abs()
 
     print("\nstrict unrest share, two denominators (top 15 by events):")
+
     top = big.sort_values("total", ascending=False).head(15)
     print(top[["total", "unrest", "share_all", "share_domestic"]]
           .round(3).to_string())
+    
     correlation = big["share_all"].corr(
         big["share_domestic"], method="spearman"
     )
+    
     print(f"\nrank correlation between the two shares: {correlation:.2f}")
     print(f"median rank change: {big['rank_change'].median():.0f} places, "
           f"largest: {big['rank_change'].max():.0f} "
@@ -134,15 +141,19 @@ def check_root19() -> None:
     columns = USED_COLUMNS + (
         "Actor1Name", "Actor2Name", "ActionGeo_FullName",
     )
+
     events = pd.concat(
         [read_events(p, columns) for p in paths], ignore_index=True
     )
+
     work = _prepare(events).work
+    
     names = events.set_index("GlobalEventID")[
         ["Actor1Name", "Actor2Name", "ActionGeo_FullName", "SOURCEURL"]
     ]
     names = names[~names.index.duplicated()]
     work = work.join(names, on="GlobalEventID")
+    
     print(f"{len(paths)} cached files, {len(events):,} events\n")
 
     fights = work[

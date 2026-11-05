@@ -43,18 +43,18 @@ def test_codes_that_differ_between_fips_and_iso() -> None:
     """
     crosswalk = load_crosswalk()
     expected = {
-        "NI": "NGA",  # Nigeria        (ISO 'NI' is Nicaragua)
+        "NI": "NGA",  # Nigeria (ISO 'NI' is Nicaragua)
         "NU": "NIC",  # Nicaragua
-        "IS": "ISR",  # Israel         (ISO 'IS' is Iceland)
+        "IS": "ISR",  # Israel (ISO 'IS' is Iceland)
         "IC": "ISL",  # Iceland
-        "RS": "RUS",  # Russia         (ISO 'RS' is Serbia)
+        "RS": "RUS",  # Russia (ISO 'RS' is Serbia)
         "RI": "SRB",  # Serbia
-        "CH": "CHN",  # China          (ISO 'CH' is Switzerland)
+        "CH": "CHN",  # China (ISO 'CH' is Switzerland)
         "SZ": "CHE",  # Switzerland
         "UK": "GBR",  # United Kingdom
-        "GB": "GAB",  # Gabon          (ISO 'GB' is the United Kingdom)
-        "GM": "DEU",  # Germany        (ISO 'GM' is Gambia)
-        "SN": "SGP",  # Singapore      (ISO 'SN' is Senegal)
+        "GB": "GAB",  # Gabon (ISO 'GB' is the United Kingdom)
+        "GM": "DEU",  # Germany (ISO 'GM' is Gambia)
+        "SN": "SGP",  # Singapore (ISO 'SN' is Senegal)
         "WA": "NAM",  # Namibia
         "US": "USA",
     }
@@ -71,7 +71,7 @@ def test_to_iso3_basic() -> None:
 
     assert result.tolist()[:2] == ["USA", "NGA"]
     assert result.isna().tolist() == [False, False, True, True, True, False]
-    assert result.iloc[5] == "GBR"  # spaces and lower case are tidied
+    assert result.iloc[5] == "GBR" # spaces and lower case are tidied
     assert len(result) == len(codes)
 
 
@@ -81,12 +81,14 @@ def test_to_iso3_keeps_the_index() -> None:
     """
     codes = pd.Series(["FR", "JA"], index=[10, 20], dtype="string")
     result = to_iso3(codes)
+
     assert result.index.tolist() == [10, 20]
     assert result.tolist() == ["FRA", "JPN"]
 
 
 def test_unknown_code_stops_the_run() -> None:
     codes = pd.Series(["US", "ZZ", "ZZ"], dtype="string")
+
     try:
         to_iso3(codes)
     except UnknownCountryCode as error:
@@ -106,6 +108,7 @@ def test_bad_crosswalk_file_is_rejected(tmp_path: Path | None = None) -> None:
     bad_file.write_text(
         "fips,iso3,name\nRP,Philippines,PHL\n", encoding="utf-8"
     )
+    
     try:
         load_crosswalk(bad_file)
     except CrosswalkError:
@@ -126,7 +129,7 @@ def check_real_files() -> None:
 
     events = pd.concat([read_events(p) for p in paths], ignore_index=True)
     fips = events["ActionGeo_CountryCode"]
-    events["iso3"] = to_iso3(fips)  # raises if any code is unrecognised
+    events["iso3"] = to_iso3(fips) # raises if any code is unrecognised
 
     print(f"{len(paths)} files, {len(events):,} rows")
     print(f"rows with a country:    {events['iso3'].notna().mean():.1%}")
@@ -135,9 +138,11 @@ def check_real_files() -> None:
           f"{fips.isin(NON_COUNTRY_CODES).mean():.1%}")
 
     print("\n--- ten most common countries (FIPS -> ISO3) ---")
+
     pairs = events.dropna(subset=["iso3"])
     print(pairs.groupby(["ActionGeo_CountryCode", "iso3"]).size()
           .sort_values(ascending=False).head(10))
+    
     print("\nREAL DATA CHECK OK")
 
 

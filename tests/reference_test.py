@@ -251,6 +251,7 @@ def test_directions_match_the_codebooks() -> None:
 
 def make_reference() -> pd.DataFrame:
     folder = temp_dir()
+
     return pd.concat([
         load_wgi(make_wgi(folder / "wgi.xlsx")),
         load_vdem(make_vdem(folder / "vdem.csv")),
@@ -278,6 +279,7 @@ def test_join_keeps_every_country_day() -> None:
     joined = join_reference(days, for_year(make_reference(), 2020))
     assert len(joined) == 3
     assert joined.loc[joined["iso3"] == "GUM", "wgi_ge"].isna().all()
+
     coverage = joined.attrs["reference_coverage"]
     assert coverage["reference_year"] == 2020
     assert coverage["with_all_variables"] == 1     # GBR only
@@ -311,6 +313,7 @@ def test_reference_is_saved_and_replaced_by_source() -> None:
 def test_rows_from_another_source_are_refused() -> None:
     reference = make_reference()
     connection = connect(":memory:")
+    
     try:
         save_reference(connection, reference, "wgi", "x", "y")
     except ValueError as error:

@@ -90,7 +90,7 @@ def expect_error(error_type, function, *args, contains: str = "") -> None:
         raise AssertionError(f"expected {error_type.__name__}")
 
 
-# ------------------------------------------------------------ settings
+# === SETTINGS ===
 
 def test_default_settings_are_valid() -> None:
     Settings().validate()
@@ -120,10 +120,12 @@ def test_bad_values_are_refused() -> None:
         expect_error(InvalidSettings, bad.validate)
 
 
-# ------------------------------------------------- building the counts
+# # === BUILDING EVENT COUNTS ===
 
 def test_unrest_denominator_uses_the_same_filter() -> None:
-    """Domestic-coded events on both sides; 'all' uses every event."""
+    """
+    Domestic-coded events on both sides; 'all' uses every event.
+    """
     d = pd.Timestamp(DAY)
     country_day = pd.DataFrame({
         "iso3": ["USA"], "date": [d], "n_events": [100],
@@ -137,6 +139,7 @@ def test_unrest_denominator_uses_the_same_filter() -> None:
                      "foreign"],
         "media_target": [0, 0, 0, 0, 0],
         "n_events": [3, 2, 4, 31, 60],
+
         # Goldstein is fixed per code: 141 -6.5, 190 -10, 173 -5, 010 0
         "goldstein_sum": [-19.5, -20.0, -20.0, 0.0, 0.0],
     })
@@ -146,11 +149,14 @@ def test_unrest_denominator_uses_the_same_filter() -> None:
         row = counts[counts["criterion"] == "unrest"].iloc[0]
         return int(row["k"]), int(row["n"])
 
-    # strict: 141 and 190; domestic denominator: 3 + 2 + 4 + 31 = 40
+    # Strict unrest includes codes 141 and 190
+    # The domestic denominator includes all domestic events
     assert unrest() == (5, 40)
-    # loose adds the arrest (173)
+
+    # Loose unrest also includes code 173 (arrests)
     assert unrest(unrest_codes="loose") == (9, 40)
-    # all located events as denominator
+
+    # The "all" denominator includes every located event
     assert unrest(unrest_denominator="all") == (5, 100)
 
     counts = build_counts(country_day, codes, Settings())
@@ -163,6 +169,7 @@ UNREST_DAY = pd.DataFrame({
     "media_pressure_events": [1], "actor_events": [80],
     "intl_conflict_events": [5], "intl_coop_events": [7],
 })
+
 UNREST_CODES = pd.DataFrame({
     "iso3": "USA", "date": pd.Timestamp(DAY),
     "event_code": ["141", "145", "190", "173", "010"],
@@ -178,12 +185,16 @@ def unrest_row(settings: Settings) -> pd.Series:
 
 
 def test_unrest_is_weighted_by_severity_tier() -> None:
-    """Default tiers: protest 1/4, riot 2/4, fight 3/4 (of the top tier)."""
+    """
+    Default tiers: protest 1/4, riot 2/4, fight 3/4 (of the top tier).
+    """
     row = unrest_row(Settings())
     assert abs(row["k"] - (3 * 0.25 + 1 * 0.5 + 2 * 0.75)) < 1e-12
+
     # k2 = sum of squared weights, used for the count's variance
     assert abs(row["k2"] - (3 * 0.0625 + 1 * 0.25 + 2 * 0.5625)) < 1e-12
     assert row["n"] == 40
+
     # loose adds the arrest (173, coerce, tier 2 of 4)
     loose = unrest_row(Settings(unrest_codes="loose"))
     assert abs(loose["k"] - (row["k"] + 4 * 0.5)) < 1e-12
@@ -197,13 +208,15 @@ def test_goldstein_weighting_is_a_sensitivity_variant() -> None:
 def test_tiers_use_the_longest_matching_prefix() -> None:
     tiers = load_tiers()
     weights = tier_weights(pd.Series(["141", "145", "1451", "200"]), tiers)
+    
     assert weights.tolist() == [0.25, 0.5, 0.5, 1.0]
+    
     without_20 = tiers[tiers["code_prefix"] != "20"]
     expect_error(ValueError, tier_weights, pd.Series(["200"]), without_20,
                  contains="no severity tier")
 
 
-# --------------------------------------------- computing the criteria
+# === COMPUTING THE CRITERIA ===
 
 def make_inputs(
         days: int = 90,
@@ -217,20 +230,27 @@ def make_inputs(
     """
     rows = []
     dates = [DAY - timedelta(days=i) for i in range(days + 1)]
+
     for d in dates:
         today = d == DAY
+
         for iso3, n, k in (
             ("BIG", 3000, 90),
             ("SMALL", 20, small_k_today if today else 0),
             ("MID", 500, 30 if today else 15),
         ):
+            
             for criterion in ("unrest", "intl_conflict", "intl_coop"):
                 rows.append((iso3, d, criterion, k, n))
+
             media_k = 0 if (iso3 == "SMALL" and media_all_zero_for_small) \
                 else max(k // 10, 1)
+            
             rows.append((iso3, d, "media_pressure", media_k, n))
+
     counts = pd.DataFrame(rows, columns=["iso3", "date", "criterion", "k",
                                          "n"])
+    
     return FastInputs(counts=counts, complete_days=sorted(dates))
 
 
@@ -238,6 +258,7 @@ def get(result: pd.DataFrame, iso3: str, criterion: str) -> pd.Series:
     match = result[(result["iso3"] == iso3)
                    & (result["criterion"] == criterion)]
     assert len(match) == 1
+
     return match.iloc[0]
 
 
@@ -245,6 +266,7 @@ def test_zero_baseline_still_gives_a_defined_value() -> None:
     result = fast_criteria(make_inputs(), DAY, Settings())
     small = get(result, "SMALL", "unrest")
     assert math.isfinite(small["value"]) and math.isfinite(small["se"])
+
     # No events today and none before: about "normal", with a wide band
     assert abs(small["value"] - 1.0) < 0.01
     assert 0.9 < small["se"] < 1.1
@@ -257,18 +279,24 @@ def test_zero_expected_without_smoothing_is_refused() -> None:
 
 
 def test_few_events_mean_a_wider_band() -> None:
-    """Same share, very different amounts of data."""
+    """
+    Same share, very different amounts of data.
+    """
     result = fast_criteria(make_inputs(), DAY, Settings())
     big = get(result, "BIG", "unrest")
     small = get(result, "SMALL", "unrest")
+
     assert abs(big["value"] - 1.0) < 0.01
     assert small["se"] > 5 * big["se"]
+
     assert bool(small["low_data"]) and not bool(big["low_data"])
 
 
 def test_one_unusual_event_in_a_small_country_is_damped() -> None:
-    """One event where none ever happened: unsmoothed, the ratio would be
-    infinite. Smoothed, it is about 2, with a wide band."""
+    """
+    One event where none ever happened: unsmoothed, the ratio would be
+    infinite. Smoothed, it is about 2, with a wide band.
+    """
     result = fast_criteria(make_inputs(small_k_today=1), DAY, Settings())
     small = get(result, "SMALL", "unrest")
     assert 1.5 < small["value"] < 2.5
@@ -280,15 +308,18 @@ def test_deviation_matches_a_hand_calculation() -> None:
     result = fast_criteria(make_inputs(), DAY, settings)
     mid = get(result, "MID", "unrest")
 
-    # Prior: all countries over the 90 baseline days
+    # Calculate the expected result directly from the test data
     k_all = 90 * (90 + 0 + 15)
     n_all = 90 * (3000 + 20 + 500)
     p0 = k_all / n_all
+
     a, c = settings.prior_strength, settings.pseudo_events
     p_b = (90 * 15 + a * p0) / (90 * 500 + a)
     se_b = math.sqrt(p_b * (1 - p_b) / (90 * 500 + a))
-    expected = 500 * p_b                     # about 15
-    ratio = (30 + c) / (expected + c)        # about 1.94
+
+    expected = 500 * p_b # about 15
+
+    ratio = (30 + c) / (expected + c) # about 1.94
     se = ratio * math.sqrt(
         (30 + c) * (1 - p_b) / (30 + c) ** 2
         + (500 * se_b) ** 2 / (expected + c) ** 2
@@ -303,8 +334,8 @@ def test_media_is_compared_across_countries_by_default() -> None:
     result = fast_criteria(make_inputs(), DAY, Settings())
     media = get(result, "BIG", "media_pressure")
     assert media["method"] == "share"
-    assert media["n_window"] == 30 * 3000          # the 30-day window
-    assert abs(media["value"] - 9 / 3000) < 1e-3   # a share, not a ratio
+    assert media["n_window"] == 30 * 3000 # the 30-day window
+    assert abs(media["value"] - 9 / 3000) < 1e-3 # a share, not a ratio
 
     deviation = fast_criteria(make_inputs(), DAY,
                               Settings(media_method="deviation"))
@@ -323,8 +354,10 @@ def test_an_unpulled_assessment_day_is_refused() -> None:
 
 
 def test_no_undefined_value_reaches_scoring() -> None:
-    """Research chat item 1: whatever the settings, no NaN or infinity
-    leaves fast_criteria, even for a country with no events at all."""
+    """
+    Whatever the settings, no NaN or infinity leaves fast_criteria, even for 
+    a country with no events at all.
+    """
     variants = [
         Settings(),
         Settings(media_method="deviation"),
@@ -343,8 +376,8 @@ def test_only_the_chosen_criteria_are_computed() -> None:
     settings = Settings(criteria=("unrest", "wgi_ge"))
     result = fast_criteria(make_inputs(), DAY, settings)
     assert set(result["criterion"]) == {"unrest"}
-    none = fast_criteria(make_inputs(), DAY,
-                         Settings(criteria=("wgi_ge",)))
+
+    none = fast_criteria(make_inputs(), DAY, Settings(criteria=("wgi_ge",)))
     assert none.empty
 
 
@@ -603,10 +636,15 @@ def test_a_whole_run_scores_every_country() -> None:
     assert (result.scores["n_criteria"] == 9).all()
     assert np.isfinite(result.scores[["score", "score_se"]]).all().all()
 
-    # BIG is best on every structural criterion except shutdown capacity
-    # (where high = bad) so it should beat MID
-    assert result.scores.loc["BIG", "score"] \
-        > result.scores.loc["MID", "score"]
+    # BIG should score higher than MID overall.
+    # Shutdown capacity is the exception: lower values are better.
+    big = result.scores.loc["BIG", "score"]
+    mid = result.scores.loc["MID", "score"]
+
+    # print(type(big), repr(big))
+    # print(type(mid), repr(mid))
+
+    assert big > mid
 
 
 def test_a_run_can_score_the_structural_criteria_only() -> None:

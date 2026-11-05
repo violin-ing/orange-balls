@@ -63,7 +63,7 @@ def main() -> None:
     )
     print(f"{len(paths)} files, {len(events):,} events\n")
 
-    # Stack both actor slots into one table: one row per actor
+    # Stack both actor slots into one table (one row per actor)
     sides = []
     for n in ("1", "2"):
         side = pd.DataFrame({
@@ -74,7 +74,6 @@ def main() -> None:
                 events[f"Actor{n}KnownGroupCode"]
             ),
             "kind": country_field_kind(events[f"Actor{n}CountryCode"]),
-            # All type codes of this actor, joined, e.g. "IGO" or "GOV MIL"
             "types": (
                 events[[f"Actor{n}{slot}" for slot in TYPE_SLOTS]]
                 .fillna("")
@@ -82,7 +81,9 @@ def main() -> None:
                 .apply(lambda row: " ".join(c for c in row if c), axis=1)
             ),
         })
+
         sides.append(side)
+
     actors = pd.concat(sides, ignore_index=True)
     grouped = actors[actors["group_code"] != ""]
 
@@ -95,6 +96,7 @@ def main() -> None:
     print("\n--- 25 most common group codes ---")
     print("(blank / country / group = how often each country field kind "
           "appears)")
+    
     top = grouped["group_code"].value_counts().head(25).index
     for code in top:
         rows = grouped[grouped["group_code"] == code]
@@ -102,6 +104,7 @@ def main() -> None:
         countries = rows.loc[rows["kind"] != "blank", "country_code"]
         names = rows["name"].value_counts().head(2).index.tolist()
         types = rows["types"].replace("", "(none)").value_counts()
+
         print(
             f"  {code:<4} {len(rows):>6,}   "
             f"blank {kinds.get('blank', 0):>5,}  "
@@ -110,6 +113,7 @@ def main() -> None:
             f"codes {countries.value_counts().head(3).index.tolist()}  "
             f"e.g. {names}"
         )
+
         top_types = {k: int(v) for k, v in types.head(3).items()}
         print(f"         types {top_types}")
 
@@ -124,6 +128,7 @@ def main() -> None:
           f"typed NGO: {int(is_ngo.sum()):,}")
 
     print("\n--- what the IGO rule would GAIN: typed IGO, blank country ---")
+
     gain = actors[is_igo & (actors["kind"] == "blank")]
     summary = gain.groupby("group_code").agg(
         slots=("name", "size"), example=("name", "first")
@@ -133,16 +138,19 @@ def main() -> None:
 
     print("\n--- what it would LOSE: region code in the country field, "
           "but not typed IGO ---")
+    
     lose = actors[~is_igo & (actors["kind"] == "group/region")]
     summary = lose.groupby("country_code").agg(
         slots=("name", "size"),
         example=("name", lambda n: list(n.value_counts().head(3).index)),
     ).sort_values("slots", ascending=False).head(15)
+
     print(f"{len(lose):,} slots")
     print(summary.to_string())
 
     print("\n--- typed IGO but holding a country code (check these) ---")
     odd = actors[is_igo & (actors["kind"] == "country")]
+    
     print(f"{len(odd):,} slots; most common: "
           f"{odd['name'].value_counts().head(5).to_dict()}")
 

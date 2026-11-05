@@ -219,7 +219,7 @@ def test_media_events_are_not_counted_as_unrest() -> None:
 def test_media_pressure() -> None:
     table = to_country_day(make_events())
     usa = get_row(table, "USA", "2026-10-05")
-    assert usa["media_pressure_events"] == 1     # event 9
+    assert usa["media_pressure_events"] == 1 # event 9
     assert usa["media_pressure_articles"] == 2
     assert get_row(table, "NGA", "2026-10-05")["media_pressure_events"] == 0
 
@@ -238,13 +238,13 @@ def test_international_conflict_and_cooperation() -> None:
     usa = get_row(table, "USA", "2026-10-05")
     nga = get_row(table, "NGA", "2026-10-05")
 
-    # USA takes part in events 1, 2, 3, 4 and 9. Event 9 has USA as both
-    # actors and is counted once.
+    # USA takes part in events 1, 2, 3, 4 and 9
+    # Event 9 has USA as both actors and is counted once
     assert usa["actor_events"] == 5
-    assert usa["actor_articles"] == 9            # 1 + 3 + 1 + 2 + 2
-    assert usa["intl_coop_events"] == 1          # event 1, with GBR
+    assert usa["actor_articles"] == 9
+    assert usa["intl_coop_events"] == 1 # event 1, with GBR
     assert usa["intl_coop_articles"] == 1
-    assert usa["intl_conflict_events"] == 1      # event 4, with NGA
+    assert usa["intl_conflict_events"] == 1 # event 4, with NGA
     assert usa["intl_conflict_articles"] == 2
 
     # The same conflict event also counts for Nigeria
@@ -257,7 +257,7 @@ def test_country_seen_only_as_actor_gets_a_row() -> None:
     gbr = get_row(table, "GBR", "2026-10-05")
     assert gbr["n_events"] == 0 and gbr["actor_events"] == 1
     assert gbr["intl_coop_events"] == 1
-    assert pd.isna(gbr["tone_mean"])             # no located events
+    assert pd.isna(gbr["tone_mean"]) # no located events
 
     # Event 6 has no location but still counts for its two actors
     fra = get_row(table, "FRA", "2026-10-05")
@@ -267,17 +267,17 @@ def test_country_seen_only_as_actor_gets_a_row() -> None:
 
 def test_igo_counts_for_the_country_only() -> None:
     table = to_country_day(make_events())
-    assert "EUR" not in table["iso3"].tolist()   # never a row of its own
+    assert "EUR" not in table["iso3"].tolist() # never a row of its own
     assert table.attrs["actor_codes_unmatched"] == {"EUR": 1}
-    # Event 5: cooperation between the EU (typed IGO) and Nigeria counts
-    # for Nigeria
+
+    # Cooperation between the EU (typed IGO) and Nigeria counts for Nigeria
     nga = get_row(table, "NGA", "2026-10-06")
     assert nga["actor_events"] == 1 and nga["intl_coop_events"] == 1
 
 
 def set_actor1(events: pd.DataFrame, country, type_code) -> pd.DataFrame:
     """
-    Change actor 1 of event 5 (the EU and Nigeria cooperating).
+    Change actor 1 of event 5 (EU and Nigeria cooperating).
     """
     is_five = events["GlobalEventID"] == 5
     events.loc[is_five, "Actor1CountryCode"] = country
@@ -317,13 +317,14 @@ def test_goldstein_sums() -> None:
     usa = get_row(table, "USA", "2026-10-05")
     nga = get_row(table, "NGA", "2026-10-05")
 
-    assert usa["unrest_goldstein"] == -6.0           # event 2
-    assert usa["unrest_loose_goldstein"] == -11.0    # plus event 3
-    assert usa["media_pressure_goldstein"] == -5.0   # event 9
-    assert usa["actor_goldstein"] == -24.0           # 1, 2, 3, 4 and 9
-    assert usa["intl_coop_goldstein"] == 2.0         # event 1
-    assert usa["intl_conflict_goldstein"] == -10.0   # event 4
-    assert nga["intl_conflict_goldstein"] == -10.0   # same event
+    assert usa["unrest_goldstein"] == -6.0 # event 2
+    assert usa["unrest_loose_goldstein"] == -11.0 # plus event 3
+    assert usa["media_pressure_goldstein"] == -5.0 # event 9
+    assert usa["actor_goldstein"] == -24.0 # 1, 2, 3, 4 and 9
+    assert usa["intl_coop_goldstein"] == 2.0 # event 1
+    assert usa["intl_conflict_goldstein"] == -10.0 # event 4
+    assert nga["intl_conflict_goldstein"] == -10.0 # same event
+
     # A criterion with no events has a sum of 0, not a missing value
     assert nga["unrest_goldstein"] == 0.0
 
@@ -335,6 +336,7 @@ def test_event_code_table() -> None:
          r.media_target, r.n_events, r.n_articles, r.goldstein_sum)
         for r in codes.itertuples()
     ]
+
     assert found == [
         ("NGA", "2026-10-05", "190", "foreign", 0, 1, 2, -10.0),
         ("NGA", "2026-10-06", "010", "foreign", 0, 1, 4, 0.0),
@@ -362,8 +364,10 @@ def test_event_code_table_agrees_with_country_day() -> None:
     domestic = (codes["relation"] == "domestic") & (codes["media_target"] == 0)
     strict = codes[root.isin(UNREST_ROOT_CODES) & domestic]
     loose = codes[root.isin(UNREST_LOOSE_ROOT_CODES) & domestic]
+
     for subset, column in ((strict, "unrest"), (loose, "unrest_loose")):
         sums = subset.groupby(keys)[["n_events", "goldstein_sum"]].sum()
+
         for key, row in sums.iterrows():
             assert table.loc[key, f"{column}_events"] == row["n_events"]
             assert table.loc[key, f"{column}_goldstein"] == (
@@ -373,13 +377,15 @@ def test_event_code_table_agrees_with_country_day() -> None:
 
 def test_dropped_rows_are_recorded() -> None:
     table = to_country_day(make_events())
+
     assert table.attrs["dropped"] == {
         "rows_in": 9,
-        "duplicate_event": 1,   # event 4 appears twice
-        "no_country": 2,        # event 6 (empty) and event 7 (oceans)
+        "duplicate_event": 1, # event 4 appears twice
+        "no_country": 2, # event 6 (empty), event 7 (oceans)
         "bad_date": 0,
         "rows_used": 6,
     }, table.attrs["dropped"]
+
     assert table["n_events"].sum() == 6
 
 
@@ -405,8 +411,11 @@ def share(part: int, whole: int) -> str:
 
 
 def check_real_files() -> None:
-    """Aggregate every cached GDELT file and print the result."""
+    """
+    Aggregate every cached GDELT file and print the result.
+    """
     paths = sorted(CACHE_DIR.glob("*.export.CSV.zip"))
+
     if not paths:
         raise SystemExit(
             f"no cached files in {CACHE_DIR}, run the fetch test first"
@@ -447,6 +456,7 @@ def check_real_files() -> None:
           f"of {len(table)}")
 
     print("\n--- ten country-days with the most events ---")
+
     columns = ["iso3", "date", "n_events", "unrest_events",
                "unrest_loose_events", "media_pressure_events",
                "actor_events", "intl_conflict_events", "intl_coop_events"]
@@ -460,12 +470,15 @@ def check_real_files() -> None:
         & (codes["relation"] == "domestic")
         & (codes["media_target"] == 0)
     ]
+
     by_code = domestic.groupby("event_code").agg(
         events=("n_events", "sum"), goldstein=("goldstein_sum", "sum")
     )
     by_code["goldstein_per_event"] = by_code["goldstein"] / by_code["events"]
+
     print(f"\n--- event code table: {len(codes):,} rows ---")
     print("most common full codes within loose unrest:")
+    
     top_codes = by_code.sort_values("events", ascending=False).head(12)
     print(top_codes.to_string(float_format="{:.1f}".format))
 

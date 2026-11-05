@@ -26,8 +26,7 @@ from src.gdelt.filelist import LAST_UPDATE, fetch_index, parse_index
 
 CACHE_DIR = Path("data/cache/gdelt")
 
-# The three example lines from the GDELT index, plus a blank line and a 
-# broken line.
+# Example lines from the GDELT index, plus a blank line and a broken line
 BASE = "http://data.gdeltproject.org/gdeltv2/20150218230000"
 
 SAMPLE_INDEX = "\n".join([
@@ -73,7 +72,7 @@ def step_3(limit: int) -> None:
     Download and read the most recent `limit` export files.
     """
     started = time.perf_counter()
-    files = fetch_index()  # The full master list (should take a while)
+    files = fetch_index() # the full master list
     print(f"master list: {len(files):,} records "
           f"in {time.perf_counter() - started:.0f}s")
 
