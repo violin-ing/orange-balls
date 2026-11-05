@@ -19,8 +19,8 @@ codes that are not countries at all, such as regions (EUR for Europe), so
 an unmatched code is normal here. Unmatched codes are counted and reported
 instead, so that a real country code that needs adding can be spotted.
 
-Note: cameo_iso3.csv is not a full list of differences. It was started
-from a few known ones and should grow as the report shows more.
+Note: cameo_iso3.csv is not a full list of differences. Will add to it as we
+keep going.
 """
 
 from __future__ import annotations

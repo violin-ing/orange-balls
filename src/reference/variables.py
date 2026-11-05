@@ -1,47 +1,78 @@
 """
-The structural (slow-layer) variables this project uses, in one place.
+Defines the structural indicators used in the country assessment.
 
-Each variable records where it comes from and which way it points. The
-direction is taken from the source's own codebook and must not be guessed:
-a reversed direction would silently invert a criterion in every score.
+All structural indicators are listed here in one place, along
+with their data source, description and scoring direction.
 
-    higher_is_better=True   a high value means better conditions for
-                            receiving an announcement
-    higher_is_better=False  a high value means worse conditions
+For each indicator, we record:
 
-Each also has a role:
-    "criterion"   scored by default
-    "candidate"   loaded and available, but scored only when named in
-                  Settings.criteria (awaiting a decision)
-    "validation"  never scored; used for checks such as the correlation
-                  with GDP per capita
+    name
+        The name used throughout the project.
 
-and, where the scale has fixed ends, its bounds (used to normalise).
+    source
+        Where the data comes from (V-Dem, WGI or World Bank).
 
-Sources for the directions:
-    V-Dem v16 codebook (Pemstein et al. 2026), answer scales:
-        v2mecenefm      0 = censorship is direct and routine
-                        4 = government rarely attempts to censor
-        v2meharjrn      0 = no journalist dares offend powerful actors
-                        4 = journalists are never harassed
-        v2smgovshutcap  0 = government lacks the capacity to shut down
-                            domestic Internet access
-                        4 = government can shut down all, or almost all
-    Digital Society Project codebook v8 (March 2026, V-Dem v16):
-        v2smgovdom      0 = government disseminates false information on
-                            all key political issues ("extremely often")
-                        4 = never, or almost never
-        v2smpardom      0 = major parties and candidates do so extremely
-                            often; 4 = never, or almost never
-        v2smpolsoc      0 = serious polarization of society
-                        4 = no polarization
-    WGI: the governance score runs from 0 (worst) to 100 (best), anchored
-    to fixed benchmarks so that it is comparable across years.
+    source_name
+        The original indicator name in the source data.
 
-V-Dem values are the measurement model's estimates, not the 0-4 answer
-scale: they have no fixed ends, so their normalisation bounds come from a
-reference period (src/score/bounds.py). The 0-4 directions above still
-hold for them.
+    label
+        A description of what the indicator measures.
+
+    higher_is_better
+        Whether a higher value represents better or worse
+        conditions for receiving an announcement.
+
+    role
+        Whether the indicator is used for scoring:
+
+            criterion
+                Included in the default country assessment.
+
+            candidate
+                Available for testing, but only included when
+                explicitly selected in Settings.criteria.
+
+            validation
+                Not included in scoring. Used for independent
+                checks, such as comparing scores with GDP per capita.
+
+    bounds
+        The natural minimum and maximum values, where the
+        measurement scale has fixed limits.
+
+Scoring direction is based on the original source documentation.
+It is important to get this right because the scoring system
+automatically adjusts each indicator so that higher always means
+better conditions.
+
+Data sources:
+
+    V-Dem
+        Measures media freedom, journalist safety, Internet
+        shutdown capacity and other political conditions.
+
+    Digital Society Project
+        Provides additional indicators of disinformation and
+        social polarisation.
+
+    WGI (Worldwide Governance Indicators)
+        Provides measures of government effectiveness and
+        political stability, on a 0-100 scale.
+
+    World Bank
+        Provides GDP per capita for independent validation only.
+
+V-Dem estimates do not have fixed minimum and maximum values.
+Their normalisation limits are therefore calculated from the
+chosen reference period.
+
+Main functions:
+
+    variables_from()
+        Returns the indicators provided by a particular source.
+
+    with_role()
+        Returns the indicators assigned to a particular role.
 """
 
 from __future__ import annotations
@@ -51,9 +82,9 @@ from dataclasses import dataclass
 
 @dataclass(frozen=True)
 class Variable:
-    name: str                  # name used in this project's tables
-    source: str                # "vdem" or "wgi"
-    source_name: str           # column (V-Dem) or sheet (WGI) in the file
+    name: str # name used in this project's tables
+    source: str # "vdem" or "wgi"
+    source_name: str # column (V-Dem) or sheet (WGI) in the file
     label: str
     higher_is_better: bool
     role: str = "criterion"
@@ -63,49 +94,58 @@ class Variable:
 VARIABLES: dict[str, Variable] = {
     v.name: v
     for v in (
+
         Variable(
             "wgi_ge", "wgi", "ge",
             "Government effectiveness (score 0-100)",
             higher_is_better=True, bounds=(0.0, 100.0),
         ),
+
         Variable(
             "wgi_pv", "wgi", "pv",
             "Political stability and absence of violence/terrorism "
             "(score 0-100)",
             higher_is_better=True, bounds=(0.0, 100.0),
         ),
+
         Variable(
             "v2mecenefm", "vdem", "v2mecenefm",
             "Government censorship effort, media (high = less censorship)",
             higher_is_better=True,
         ),
+
         Variable(
             "v2meharjrn", "vdem", "v2meharjrn",
             "Harassment of journalists (high = less harassment)",
             higher_is_better=True,
         ),
+
         Variable(
             "v2smgovshutcap", "vdem", "v2smgovshutcap",
             "Government Internet shut down capacity (high = more capacity)",
             higher_is_better=False,
         ),
+
         Variable(
             "v2smgovdom", "vdem", "v2smgovdom",
             "Government dissemination of false information, domestic "
             "(high = less)",
             higher_is_better=True, role="candidate",
         ),
+
         Variable(
             "v2smpardom", "vdem", "v2smpardom",
             "Party dissemination of false information, domestic "
             "(high = less)",
             higher_is_better=True, role="candidate",
         ),
+
         Variable(
             "v2smpolsoc", "vdem", "v2smpolsoc",
             "Polarization of society (high = less polarized)",
             higher_is_better=True, role="candidate",
         ),
+
         Variable(
             "gdp_pc", "wb", "NY.GDP.PCAP.PP.KD",
             "GDP per capita, PPP (constant 2021 international $)",
@@ -118,12 +158,17 @@ ROLES = ("criterion", "candidate", "validation")
 
 
 def variables_from(source: str) -> list[Variable]:
-    """The variables that come from one source, in a fixed order."""
+    """
+    The variables that come from one source, in a fixed order.
+    """
     return [v for v in VARIABLES.values() if v.source == source]
 
 
 def with_role(role: str) -> list[str]:
-    """Names of the variables with one role, in a fixed order."""
+    """
+    Names of the variables with one role, in a fixed order.
+    """
     if role not in ROLES:
         raise ValueError(f"role must be one of {ROLES}")
+    
     return [n for n, v in VARIABLES.items() if v.role == role]

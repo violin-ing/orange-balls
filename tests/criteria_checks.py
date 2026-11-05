@@ -1,5 +1,5 @@
 """
-One-off checks raised by the research chat. Run from the repo root:
+One-off checks as described below.
 
     python -m tests.criteria_checks              (all checks)
     python -m tests.criteria_checks --only 3     (one check)
@@ -13,21 +13,18 @@ Check 1 -- actor coding coverage (reads the database)
 
 Check 2 -- are domestic root-19 events really domestic? (reads the cache)
     "Use conventional military force" events may be located in the acting
-    military's own country even when the action was abroad. This prints,
-    for a few large countries, how many domestic root-19 events have no
+    military's own country even when the action was abroad. This prints
+    (for a few large countries) how many domestic root-19 events have no
     second actor, and a sample of them to judge by eye.
 
 Check 3 -- how many events a day does a country have? (reads the database)
-    Shares from countries with few events are noisy. This prints, per
-    country, the median number of events a day over all complete days,
+    Shares from countries with few events are noisy. This prints (per
+    country) the median number of events a day over all complete days,
     for each denominator in use, and how many countries fall below 50.
     Also the share of each country's located events with usable actor
     coding (domestic or foreign, i.e. not "no_country").
 
-Source addresses are printed to the screen to help judge plausibility.
-Nothing is stored.
-
-Not a unit test: pytest does not collect this file.
+Note that this is not a unit test.
 """
 
 from __future__ import annotations

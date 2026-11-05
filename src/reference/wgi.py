@@ -1,27 +1,28 @@
 """
-Loads the Worldwide Governance Indicators (WGI) Excel file.
+Loads the Worldwide Governance Indicators (WGI) data from an Excel file.
 
-The file has one sheet per governance dimension (va, pv, ge, rq, rl, cc),
-each with one row per economy and year. Only the dimensions listed in
-src/reference/variables.py are read.
+Each governance dimension has its own sheet. The loader reads only the
+dimensions listed in src/reference/variables.py and the columns needed
+for each one:
+    - country code and name
+    - year
+    - governance score (0 - 100)
+    - standard error of the governance score
 
 Things to note:
-    - Missing values are written as "..".
-    - Two scales are published. The estimate (about -2.5 to +2.5) is
-      centred on each year's global average, so it is relative. The
-      governance score (0-100) is the same estimate anchored to two fixed
-      benchmark countries, so it is comparable across years. The score is
-      used (2025 methodology revision, section 4.1).
-    - Uncertainty: "Standard error (gov. score)". The file gives a 90%
-      interval only for the estimate; the score is a straight-line
-      rescaling of it, so its 90% interval is score -+ 1.645 x standard
-      error (checked: the estimate's published interval is estimate -+
-      1.645 x its standard error).
-    - Years are not continuous: 1996, 1998, 2000, then every year from
-      2002.
-    - The "with source data" edition also lists which outside sources
-      feed each dimension (columns ending " mean"). They are not loaded
-      here, but they answer which sources sit inside WGI.
+    - WGI marks missing values with "..".
+    - The standard error is used to calculate the lower and upper
+      uncertainty bounds. These represent a 90% interval, using
+      (score ± 1.645 * standard error).
+    - WGI does not publish data for every year. Available years start
+      with 1996, 1998 and 2000, followed by annual data from 2002.
+
+Rows before min_year are excluded. Country codes are checked, rows
+without a score are removed, and duplicate country-year-variable
+records are rejected.
+
+The result is returned in the standard long reference table format
+(see src/reference/common.py).
 """
 
 from __future__ import annotations
@@ -43,29 +44,25 @@ YEAR = "Year"
 SCORE = "Governance score (0-100)"
 SCORE_ERROR = "Standard error (gov. score)"
 INTERVAL = 0.90
-Z_90 = 1.6448536269514722     # normal quantile for a 90% interval
+Z_90 = 1.6448536269514722 # Z-value for 90% CI
 
-# Codes in the file that are not countries this project scores
 DROPPED: dict[str, str] = {
-    "ANT": "Netherlands Antilles, dissolved in 2010",
+    "ANT": "Netherlands Antilles (dissolved in 2010)",
 }
 
 
 def load_wgi(path: Path | str, min_year: int = 2000) -> pd.DataFrame:
     """
-    Read the WGI dimensions this project uses into the long reference
-    table (see src/reference/common.py). Years before min_year are left
-    out.
+    Read the WGI dimensions this project uses into the long reference table
+    (see src/reference/common.py). Years before min_year are excluded.
     """
     frames: list[pd.DataFrame] = []
     for variable in variables_from("wgi"):
         sheet = pd.read_excel(
             path,
             sheet_name=variable.source_name,
-            # keep_default_na=False stops codes such as "NA" being read as
-            # missing; WGI's own missing marker is ".."
-            keep_default_na=False,
-            na_values=[".."],
+            keep_default_na=False, # stops "NA" from being read as missing
+            na_values=[".."], # WGI's missing marker is ".."
         )
         needed = [CODE, NAME, YEAR, SCORE, SCORE_ERROR]
         missing = [c for c in needed if c not in sheet.columns]
@@ -96,7 +93,9 @@ def load_wgi(path: Path | str, min_year: int = 2000) -> pd.DataFrame:
 
     table = pd.concat(frames, ignore_index=True)
     table = table.dropna(subset=["value"])
+
     check_unique(table, "WGI")
+
     return table[REFERENCE_COLUMNS].sort_values(
         ["variable", "year", "iso3"], ignore_index=True
     )

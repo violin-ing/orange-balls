@@ -52,7 +52,7 @@ INDICATOR = "Indicator Code"
 REGION = "Region"
 HEADER_LINES = 4
 
-# Drop economies with no ISO3 equivalent in this project
+# Drop economies with no ISO3 equivalent
 DROPPED: dict[str, str] = {
     "CHI": "Channel Islands (GDELT and WGI have Jersey and Guernsey)",
 }

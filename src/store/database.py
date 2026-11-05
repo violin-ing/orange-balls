@@ -1,26 +1,42 @@
 """
-Stores the country-day tables in a SQLite database.
+Stores the project's country-day data, reference data and scoring bounds
+in a SQLite database.
 
-SQLite keeps a whole database in one file. It is built into Python, so
-nothing extra needs installing.
+SQLite stores the database in a single file and is included with Python,
+so no separate database software is needed.
 
-Tables:
-    country_day     one row per country per day (from to_country_day)
-    event_code_day  one row per country, day, event code, relation and
-                    media target (from to_event_code_day)
-    pull_log        one row per day pulled: when, how many files, what was
-                    dropped, and how many actor codes were not countries
-    reference       V-Dem and WGI values, one row per country, year and
-                    variable (from src/reference)
-    reference_file  which reference file each source was loaded from, with
-                    its SHA-256 checksum
-    norm_bounds     fixed normalisation bounds per criterion (from
-                    src/score/bounds.py, saved by src.compute_bounds)
+The database contains six tables:
+    
+    1. country_day: daily totals and measurements for each country
+    
+    2. event_code_day: daily event counts grouped by event code, relation
+       and whether the event targeted the media
+    
+    3. pull_log: a record of each day's data download, including file
+       counts, dropped rows and unmatched actor codes
+    
+    4. reference: yearly V-Dem and WGI indicator values and uncertainty
+       information
+    
+    5. reference_file: the file used for each reference source, its
+       SHA-256 checksum and loading details
+    
+    6. norm_bounds: fixed normalisation bounds for each criterion and
+       settings variant
 
-Things to note:
-    - Saving a day that is already stored replaces it. Nothing is duplicated.
-    - Only country-level totals are stored. No article addresses or text.
-    - Dates are stored as text in the form YYYY-MM-DD.
+Important details:
+    - Saving a day replaces any existing data for that day, rather
+      than creating duplicates.
+    - Only country-level totals and grouped event counts are stored.
+      Article text and addresses are not saved.
+    - Dates are stored as YYYY-MM-DD text.
+    - Database tables are checked against the current code. If their
+      columns do not match, the loader raises SchemaMismatch.
+
+The functions in this module create and connect to the database, save
+and load daily data, record reference files, and save and load
+normalisation bounds. Data changes are saved in transactions so a
+failed write does not leave only part of an update in the database.
 """
 
 from __future__ import annotations
@@ -40,29 +56,38 @@ from src.transform.aggregate import (
 )
 
 DB_PATH = Path("data/processed/country_day.sqlite")
-FILES_PER_DAY = 96  # one file every 15 minutes
+FILES_PER_DAY = 96 # one file every 15 minutes (24 x 4 = 96)
 
-# Column name -> SQLite type, in the order to_country_day() produces them.
-# INTEGER is a whole number, REAL is a decimal number.
+
+# SQLite column names and types for the country-day table
 MEASURE_COLUMNS: dict[str, str] = {
-    "n_events": "INTEGER",
+    "n_events": "INTEGER", # INTEGER = whole number
     "n_mentions": "INTEGER",
     "n_articles": "INTEGER",
-    "tone_mean": "REAL",
+    "tone_mean": "REAL", # REAL = decimal number
     "tone_mean_weighted": "REAL",
     "goldstein_mean": "REAL",
-    **{f"quad_{q}": "INTEGER" for q in QUAD_CLASSES},
-    **{f"root_{code}": "INTEGER" for code in ROOT_CODES},
     "root_other": "INTEGER",
-    # Criteria inputs: events and articles are whole numbers, Goldstein
-    # sums are decimals
-    **{
-        name: "REAL" if name.endswith("_goldstein") else "INTEGER"
-        for name in criterion_columns()
-    },
 }
 
+# Add the four event quadrants
+for q in QUAD_CLASSES:
+    MEASURE_COLUMNS[f"quad_{q}"] = "INTEGER"
+
+# Add the event root-code columns
+for code in ROOT_CODES:
+    MEASURE_COLUMNS[f"root_{code}"] = "INTEGER"
+
+# Add the inputs used by the scoring criteria
+for name in criterion_columns():
+    if name.endswith("_goldstein"):
+        MEASURE_COLUMNS[name] = "REAL"
+    else:
+        MEASURE_COLUMNS[name] = "INTEGER"
+
+
 TABLE_COLUMNS: list[str] = ["iso3", "date", *MEASURE_COLUMNS]
+
 
 LOG_COLUMNS: list[str] = [
     "date", "pulled_at", "files_listed", "files_read", "complete",
@@ -75,8 +100,7 @@ REFERENCE_FILE_COLUMNS: list[str] = [
     "source", "file_name", "sha256", "loaded_at", "rows",
 ]
 
-# Defined here so the store does not depend on the scoring code;
-# src/score/bounds.py imports it.
+
 BOUNDS_COLUMNS: list[str] = [
     "criterion", "variant", "lower", "upper", "mean", "sd", "method",
     "reference_start", "reference_end", "computed_at",
@@ -85,18 +109,15 @@ BOUNDS_COLUMNS: list[str] = [
 
 class SchemaMismatch(RuntimeError):
     """
-    The database file was made by an older version of the code and its
-    columns no longer match.
+    The database's columns no longer match.
     """
 
 
 def connect(path: Path | str = DB_PATH) -> sqlite3.Connection:
     """
     Open the database, creating the file and all tables if they do not exist.
-
-    Pass ":memory:" to get a temporary database that lives only in memory.
-    The tests use this so they never touch the real file.
     """
+    # Used by tests so they never touch the actual DB (they just one in-memory)
     if str(path) != ":memory:":
         Path(path).parent.mkdir(parents=True, exist_ok=True)
 
@@ -105,8 +126,8 @@ def connect(path: Path | str = DB_PATH) -> sqlite3.Connection:
     measures = ",\n    ".join(
         f"{name} {kind}" for name, kind in MEASURE_COLUMNS.items()
     )
-    # PRIMARY KEY (iso3, date) means the database itself refuses a second
-    # row for the same country and day.
+    
+    # Create country_day
     connection.execute(f"""
         CREATE TABLE IF NOT EXISTS country_day (
             iso3 TEXT NOT NULL,
@@ -115,6 +136,8 @@ def connect(path: Path | str = DB_PATH) -> sqlite3.Connection:
             PRIMARY KEY (iso3, date)
         )
     """)
+
+    # Create event_code_day
     connection.execute("""
         CREATE TABLE IF NOT EXISTS event_code_day (
             iso3 TEXT NOT NULL,
@@ -128,6 +151,8 @@ def connect(path: Path | str = DB_PATH) -> sqlite3.Connection:
             PRIMARY KEY (iso3, date, event_code, relation, media_target)
         )
     """)
+
+    # Create pull_log
     connection.execute("""
         CREATE TABLE IF NOT EXISTS pull_log (
             date TEXT PRIMARY KEY,
@@ -143,6 +168,8 @@ def connect(path: Path | str = DB_PATH) -> sqlite3.Connection:
             actor_unmatched INTEGER NOT NULL
         )
     """)
+
+    # Create reference
     connection.execute("""
         CREATE TABLE IF NOT EXISTS reference (
             iso3 TEXT NOT NULL,
@@ -157,6 +184,8 @@ def connect(path: Path | str = DB_PATH) -> sqlite3.Connection:
             PRIMARY KEY (iso3, year, variable)
         )
     """)
+
+    # Create reference_file
     connection.execute("""
         CREATE TABLE IF NOT EXISTS reference_file (
             source TEXT PRIMARY KEY,
@@ -166,6 +195,8 @@ def connect(path: Path | str = DB_PATH) -> sqlite3.Connection:
             rows INTEGER NOT NULL
         )
     """)
+
+    # Create norm_bounds
     connection.execute("""
         CREATE TABLE IF NOT EXISTS norm_bounds (
             criterion TEXT NOT NULL,
@@ -181,11 +212,10 @@ def connect(path: Path | str = DB_PATH) -> sqlite3.Connection:
             PRIMARY KEY (criterion, variant)
         )
     """)
+
     connection.commit()
 
-    # CREATE TABLE IF NOT EXISTS leaves an existing table alone, so a file
-    # made by older code keeps its old columns. Check for that here, where
-    # the message can say what to do, instead of failing later on insert.
+    # Check for outdated columns
     expected = {
         "country_day": TABLE_COLUMNS,
         "event_code_day": EVENT_CODE_COLUMNS,
@@ -203,30 +233,31 @@ def connect(path: Path | str = DB_PATH) -> sqlite3.Connection:
             connection.close()
             raise SchemaMismatch(
                 f"{path}: table {table_name} has different columns from "
-                "the current code. Nothing is lost: delete the database "
-                "file and run src.pull_day again to rebuild it from the "
-                "cached downloads."
+                "the current code. Delete the database file and run "
+                "src.pull_day again to rebuild it from the cached downloads."
             )
     return connection
 
 
 def _plain_rows(table: pd.DataFrame, dates: pd.Series) -> pd.DataFrame:
     """
-    SQLite needs plain Python values. astype(object) turns pandas numbers
-    into Python numbers, and missing values become None (NULL in SQL).
+    SQLite needs plain Python values. astype(object) converts pandas numbers
+    into Python numbers, and missing values become None.
     """
     rows = table.assign(date=dates).astype(object)
     return rows.where(table.notna(), None)
 
 
 def _check_one_day(table: pd.DataFrame, day_text: str, name: str) -> None:
-    """Refuse a table holding rows for any day other than day_text."""
+    """
+    Refuse a table holding rows for any day other than day_text.
+    """
     dates = pd.to_datetime(table["date"]).dt.strftime("%Y-%m-%d")
     other_days = sorted(set(dates) - {day_text})
+
     if other_days:
         raise ValueError(
-            f"{name} holds rows for other days than {day_text}: "
-            f"{other_days}"
+            f"{name} holds rows for other days than {day_text}: {other_days}"
         )
 
 
@@ -242,9 +273,8 @@ def save_day(
     Store one day's country-day table, its event code table and its pull
     record.
 
-    If the day is already stored, its old rows are removed first, so running
-    the same day twice gives the same result as running it once. If codes
-    is None, the day's event code rows are removed and none are written.
+    If the day exists, its old rows are removed first. If codes is None, 
+    the day's event code rows are removed and none are written.
 
     Returns the number of country rows written.
     """
@@ -254,6 +284,7 @@ def save_day(
             f"Missing: {sorted(set(TABLE_COLUMNS) - set(table.columns))}, "
             f"unexpected: {sorted(set(table.columns) - set(TABLE_COLUMNS))}"
         )
+    
     if codes is not None and list(codes.columns) != EVENT_CODE_COLUMNS:
         raise ValueError(
             f"event code table columns should be {EVENT_CODE_COLUMNS}, "
@@ -265,10 +296,10 @@ def save_day(
         raise ValueError(
             "table has no record of dropped rows (table.attrs['dropped'])"
         )
+    
     unmatched = table.attrs.get("actor_codes_unmatched", {})
 
-    # Every row must belong to the day being saved. A row from another day
-    # would be written under the wrong pull record.
+    # Check that every row belongs to the day being saved
     day_text = day.isoformat()
     _check_one_day(table, day_text, "table")
     rows = _plain_rows(table, pd.Series(day_text, index=table.index))
@@ -298,22 +329,25 @@ def save_day(
             f"VALUES ({', '.join('?' for _ in columns)})"
         )
 
-    # "with connection" makes every statement one transaction: either all
-    # of them happen or none do, so a crash cannot leave half a day.
+    # "with connection" ensures atomicity
     with connection:
+
         for table_name in ("country_day", "event_code_day"):
             connection.execute(
                 f"DELETE FROM {table_name} WHERE date = ?", (day_text,)
             )
+
         connection.executemany(
             insert("country_day", TABLE_COLUMNS),
             rows.itertuples(index=False, name=None),
         )
+
         if code_rows is not None:
             connection.executemany(
                 insert("event_code_day", EVENT_CODE_COLUMNS),
                 code_rows.itertuples(index=False, name=None),
             )
+
         connection.execute(
             insert("pull_log", LOG_COLUMNS).replace(
                 "INSERT", "INSERT OR REPLACE", 1
@@ -332,21 +366,26 @@ def _where(
     """
     Build the WHERE part of a query from the optional filters.
 
-    The values are passed separately (the ? marks), never pasted into the
-    query text. This is what prevents SQL injection.
+    To prevent SQLi, the values are passed separately and are never pasted into
+    the query text.
     """
     conditions: list[str] = []
     values: list[str] = []
+
     if start is not None:
         conditions.append("date >= ?")
         values.append(start.isoformat())
+
     if end is not None:
         conditions.append("date <= ?")
         values.append(end.isoformat())
+
     if iso3 is not None:
         conditions.append("iso3 = ?")
         values.append(iso3)
+
     where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
+
     return where, values
 
 
@@ -358,16 +397,16 @@ def load_country_day(
     ) -> pd.DataFrame:
     """
     Read stored country-day rows back, sorted by date then country.
-
-    All three filters are optional. start and end are both included.
     """
     where, values = _where(start, end, iso3)
     query = (
         f"SELECT {', '.join(TABLE_COLUMNS)} FROM country_day {where} "
         "ORDER BY date, iso3"
     )
+
     table = pd.read_sql_query(query, connection, params=values)
     table["date"] = pd.to_datetime(table["date"], format="%Y-%m-%d")
+
     return table
 
 
@@ -386,14 +425,19 @@ def load_event_codes(
         f"SELECT {', '.join(EVENT_CODE_COLUMNS)} FROM event_code_day "
         f"{where} ORDER BY date, iso3, event_code, relation, media_target"
     )
+
     table = pd.read_sql_query(query, connection, params=values)
     table["date"] = pd.to_datetime(table["date"], format="%Y-%m-%d")
+
     return table
 
 
 def load_pull_log(connection: sqlite3.Connection) -> pd.DataFrame:
-    """Read the record of every day pulled, oldest first."""
+    """
+    Read the record of every day pulled, oldest first.
+    """
     query = f"SELECT {', '.join(LOG_COLUMNS)} FROM pull_log ORDER BY date"
+
     return pd.read_sql_query(query, connection)
 
 
@@ -415,7 +459,9 @@ def save_reference(
             f"reference table columns should be {REFERENCE_COLUMNS}, "
             f"got {list(table.columns)}"
         )
+    
     other = sorted(set(table["source"]) - {source})
+
     if other:
         raise ValueError(f"table holds rows for other sources: {other}")
 
@@ -433,15 +479,18 @@ def save_reference(
 
     with connection:
         connection.execute("DELETE FROM reference WHERE source = ?", (source,))
+
         connection.executemany(
             insert("reference", REFERENCE_COLUMNS, "INSERT"),
             rows.itertuples(index=False, name=None),
         )
+
         connection.execute(
             insert("reference_file", REFERENCE_FILE_COLUMNS,
                    "INSERT OR REPLACE"),
             file_row,
         )
+
     return len(rows)
 
 
@@ -457,31 +506,39 @@ def load_reference(
     """
     conditions: list[str] = []
     values: list[object] = []
+
     if variables is not None:
         conditions.append(
             f"variable IN ({', '.join('?' for _ in variables)})"
         )
         values.extend(variables)
+
     if start_year is not None:
         conditions.append("year >= ?")
         values.append(start_year)
+
     if end_year is not None:
         conditions.append("year <= ?")
         values.append(end_year)
+
     where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
     query = (
         f"SELECT {', '.join(REFERENCE_COLUMNS)} FROM reference {where} "
         "ORDER BY variable, year, iso3"
     )
+
     return pd.read_sql_query(query, connection, params=values)
 
 
 def load_reference_files(connection: sqlite3.Connection) -> pd.DataFrame:
-    """Which file each reference source was loaded from."""
+    """
+    Which file each reference source was loaded from.
+    """
     query = (
         f"SELECT {', '.join(REFERENCE_FILE_COLUMNS)} FROM reference_file "
         "ORDER BY source"
     )
+
     return pd.read_sql_query(query, connection)
 
 
@@ -495,19 +552,24 @@ def save_bounds(connection: sqlite3.Connection, table: pd.DataFrame) -> int:
             f"bounds table columns should be {BOUNDS_COLUMNS}, "
             f"got {list(table.columns)}"
         )
-    bad = table[~(table["upper"] > table["lower"])]
+    
+    bad = table[table["upper"] <= table["lower"]]
     if not bad.empty:
         raise ValueError(
             "upper bound not above lower bound:\n"
             f"{bad[['criterion', 'lower', 'upper']].to_string(index=False)}"
         )
+    
     rows = table.astype(object).where(table.notna(), None)
+
     query = (
         f"INSERT OR REPLACE INTO norm_bounds ({', '.join(BOUNDS_COLUMNS)}) "
         f"VALUES ({', '.join('?' for _ in BOUNDS_COLUMNS)})"
     )
+
     with connection:
         connection.executemany(query, rows.itertuples(index=False, name=None))
+
     return len(rows)
 
 
@@ -515,13 +577,17 @@ def load_bounds(
         connection: sqlite3.Connection,
         variants: list[str] | None = None,
     ) -> pd.DataFrame:
-    """Stored bounds, optionally for some variants only."""
+    """
+    Stored bounds, optionally for some variants only.
+    """
     where, values = "", []
     if variants is not None:
         where = f"WHERE variant IN ({', '.join('?' for _ in variants)})"
         values = list(variants)
+
     query = (
         f"SELECT {', '.join(BOUNDS_COLUMNS)} FROM norm_bounds {where} "
         "ORDER BY criterion, variant"
     )
+
     return pd.read_sql_query(query, connection, params=values)

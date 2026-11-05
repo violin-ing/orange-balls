@@ -17,9 +17,6 @@ What it does:
     4. Replaces that source's rows in the database
     5. Reports coverage: countries per year, and how many GDELT countries
        have reference data for the chosen year
-
-Run it again whenever a reference file is replaced. It never touches the
-GDELT tables.
 """
 
 from __future__ import annotations

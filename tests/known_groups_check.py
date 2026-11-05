@@ -5,14 +5,11 @@ country code field?
 
     python3 -m tests.known_groups_check
 
-Reads the GDELT files already in the cache. Needs no network.
-
-Why it matters: international conflict and cooperation count an event when
-the other actor is a different country or a group of countries (a code such
-as WST for NATO). If GDELT leaves the country field BLANK for some groups,
-those events are currently missed, and organisations need separate
-handling. The answer decides whether that is a filter change or a bigger
-one.
+International conflict and cooperation count an event when the other actor 
+is a different country or a group of countries (a code such as WST for NATO). 
+If GDELT leaves the country field BLANK for some groups, those events are
+currently missed, and organisations need separate handling. The answer decides 
+whether that is a filter change or a bigger one.
 
 Second question: does GDELT fill in the actor TYPE codes IGO
 (intergovernmental organisation) and NGO (non-governmental organisation)
@@ -20,7 +17,7 @@ for these groups? If so, "the other actor is a different country, or is
 typed IGO" can replace the region-code rule. The last two sections show
 what that change would gain and lose.
 
-Not a unit test: pytest does not collect this file.
+Note that this is not a unit test.
 """
 
 from __future__ import annotations

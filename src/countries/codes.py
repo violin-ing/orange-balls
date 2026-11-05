@@ -16,8 +16,8 @@ http://data.gdeltproject.org/api/v2/guides/LOOKUP-COUNTRIES.TXT
 Things to note:
     - Several FIPS codes can share one ISO3 code. Gaza Strip (GZ) and
       West Bank (WE) both become PSE.
-    - Kosovo (KV) becomes XKX. This is not an official ISO code, but it is
-      the code WGI and V-Dem use.
+    - Kosovo (KV) becomes XKX (not an official code, but used by WGI and 
+      V-Dem).
 """
 
 from __future__ import annotations
@@ -38,14 +38,14 @@ NON_COUNTRY_CODES: frozenset[str] = frozenset(
         "DX",  # Dhekelia Sovereign Base Area
         "IP",  # Clipperton Island
         "NM",  # No Man's Land
-        "NT",  # Netherlands Antilles (dissolved in 2010)
+        "NT",  # Netherlands Antilles
         "OS",  # Oceans
         "PF",  # Paracel Islands
         "PG",  # Spratly Islands
         "PJ",  # Etorofu, Habomai, Kunashiri and Shikotan Islands
         "UF",  # Undersea Features
         "UU",  # Undesignated Sovereignty
-        "OC",  # Oceans (not in GDELT list but seen in data, e.g. Indian Ocean)
+        "OC",  # Oceans
     }
 )
 
@@ -67,9 +67,7 @@ def load_crosswalk(path: Path = CROSSWALK_PATH) -> dict[str, str]:
     """
     Load fips_iso3.csv and return it as a {FIPS: ISO3} dictionary.
 
-    The file is checked every time it is loaded. It is edited by hand, and a
-    typo here would put a country's events in the wrong place for every
-    result that follows.
+    The file is checked every time it is loaded. It is edited manually.
     """
     # Note: keep_default_na=False stops pandas turning country codes such as 
     # "NA" into a missing value
@@ -93,8 +91,6 @@ def load_crosswalk(path: Path = CROSSWALK_PATH) -> dict[str, str]:
             f"ISO3 codes must be three capital letters: {bad_iso3.tolist()}"
         )
 
-    # A FIPS code listed twice would make the conversion ambiguous, but an
-    # ISO3 code listed twice is allowed
     duplicates = frame.loc[frame["fips"].duplicated(), "fips"]
     if not duplicates.empty:
         raise CrosswalkError(f"duplicate FIPS codes: {duplicates.tolist()}")
@@ -124,9 +120,6 @@ def to_iso3(
         - empty, or a code
           in NON_COUNTRY_CODES -> missing value
         - anything else      -> UnknownCountryCode is raised
-
-    The third case stops the run on purpose. Skipping unknown codes quietly
-    would leave countries missing from the results with nothing to show why.
     """
     if crosswalk is None:
         crosswalk = load_crosswalk()

@@ -11,8 +11,6 @@ Run from the repository root:
     python -m src.compute_bounds --fast-from 2026-08-01 --fast-to 2026-10-31
 
 This script sets the reference scale used by the scoring system.
-It should be run once the reference data has been loaded, and only
-run again when there is a deliberate decision to change that scale.
 
 It calculates limits for two types of indicators:
 
@@ -52,15 +50,6 @@ Options:
 
     --skip-fast
         Calculate structural limits only.
-
-If different GDELT scoring settings are used for sensitivity
-testing, separate limits must be calculated for each set of
-settings. These are identified by a variant code.
-
-Important:
-Changing the reference limits can change every country's score.
-Keep the reference periods fixed and record them in the project
-methodology so that results remain comparable over time.
 """
 
 from __future__ import annotations

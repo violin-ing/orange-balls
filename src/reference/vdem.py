@@ -1,23 +1,24 @@
 """
-Loads the V-Dem Country-Year (Full+Others) CSV file.
+Loads the V-Dem country-year data used by this project.
 
-The file has over 4,000 columns. Only country_text_id, year and, for each
-variable in src/reference/variables.py, four columns are read:
+The original V-Dem file contains thousands of columns. This loader reads
+only the country code, country name, year, and the four data fields needed
+for each V-Dem variable listed in src/reference/variables.py:
+    - value: the estimated measurement
+    - sd: the standard deviation
+    - low: the lower uncertainty bound
+    - high: the upper uncertainty bound
 
-    <var>            the measurement model's point estimate
-    <var>_sd         its standard deviation
-    <var>_codelow    lower uncertainty bound
-    <var>_codehigh   upper uncertainty bound
+Important details:
+    - V-Dem uses its own country codes. Codes that do not match this
+      project's ISO3 codes must be listed in DROPPED or the load stops.
+    - Rows before min_year are excluded. This also removes historical
+      states that do not have an ISO3 code.
+    - The uncertainty interval for the low/high bounds is not recorded.
 
-Things to note:
-    - country_text_id is V-Dem's own three-letter code. It is mostly the
-      same as ISO3, but V-Dem also covers places that are not separate
-      countries in GDELT. Unknown codes stop the load (see DROPPED).
-    - Years before min_year are left out. This also skips historical
-      states (e.g. 19th-century German states) that have no ISO3 code.
-    - The width of the _codelow/_codehigh interval is not recorded here
-      (interval is left missing). Check the codebook's "Variable Versions
-      and Suffixes" section before using those bounds; use sd meanwhile.
+The loader converts the selected data into the standard long reference
+table, removes rows without a value, checks for duplicate entries, and
+returns the result sorted by variable, year and country.
 """
 
 from __future__ import annotations
@@ -38,8 +39,8 @@ NAME = "country_name"
 YEAR = "year"
 SUFFIXES = {"value": "", "sd": "_sd", "low": "_codelow", "high": "_codehigh"}
 
-# V-Dem codes with no ISO3 equivalent in this project, dropped on purpose.
-# Fill in from the first real run: the loader lists any unknown codes.
+# V-Dem codes with no ISO3 equivalent in this project
+# This list will be filled in as we progress and perform more runs
 DROPPED: dict[str, str] = {
     # GDELT and WGI treat these as part of Somalia (SOM) and Tanzania (TZA)
     "SML": "Somaliland",
@@ -76,12 +77,11 @@ def load_vdem(path: Path | str, min_year: int = 2000) -> pd.DataFrame:
         path,
         usecols=[CODE, NAME, YEAR, *value_columns],
         dtype={CODE: "string", NAME: "string"},
-        # Only empty cells and "NA" count as missing, and only in the
-        # number columns, so a country code is never read as missing
         keep_default_na=False,
         na_values={c: ["", "NA"] for c in value_columns},
         low_memory=False,
     )
+
     frame = frame[frame[YEAR] >= min_year]
     frame[CODE] = frame[CODE].str.strip()
     keep = check_codes(frame[CODE], frame[NAME], DROPPED, "V-Dem")
@@ -95,6 +95,7 @@ def load_vdem(path: Path | str, min_year: int = 2000) -> pd.DataFrame:
             )
             for field, suffix in SUFFIXES.items()
         }
+
         frames.append(pd.DataFrame({
             "iso3": frame[CODE].astype(str),
             "year": frame[YEAR].astype("int64"),
@@ -106,7 +107,9 @@ def load_vdem(path: Path | str, min_year: int = 2000) -> pd.DataFrame:
 
     table = pd.concat(frames, ignore_index=True)
     table = table.dropna(subset=["value"])
+    
     check_unique(table, "V-Dem")
+
     return table[REFERENCE_COLUMNS].sort_values(
         ["variable", "year", "iso3"], ignore_index=True
     )

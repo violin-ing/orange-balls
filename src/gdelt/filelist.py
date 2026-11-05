@@ -105,8 +105,8 @@ def fetch_index(
     """
     Download and parse an index file.
  
-    The master list is very big, so the tool should ideally fetch it once, 
-    cache it, and reuse it.
+    The master list is very big, so the tool should fetch it once, cache it,
+    and reuse it.
     """
     response = httpx.get(url, timeout=timeout, follow_redirects=True)
     response.raise_for_status()
@@ -122,7 +122,7 @@ def select_day(
     Return the files for one calendar day of one stream, in time order.
  
     A complete day is 24 * 4 = 96 files. Fewer means GDELT had an outage in 
-    that window (which happens) so the caller should check rather than assume.
+    that window.
     """
     selected = [f for f in files if f.stream == stream and f.day == target]
     return sorted(selected, key=lambda f: f.stamp)

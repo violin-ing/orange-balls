@@ -13,12 +13,14 @@ http://data.gdeltproject.org/documentation/GDELT-Event_Codebook-V2.0.pdf
 from __future__ import annotations
 
 EVENT_COLUMNS: tuple[str, ...] = (
+
     # --- Event identification ---
     "GlobalEventID",
     "Day",
     "MonthYear",
     "Year",
     "FractionDate",
+
     # --- Actor 1 ---
     "Actor1Code",
     "Actor1Name",
@@ -30,6 +32,7 @@ EVENT_COLUMNS: tuple[str, ...] = (
     "Actor1Type1Code",
     "Actor1Type2Code",
     "Actor1Type3Code",
+
     # --- Actor 2 ---
     "Actor2Code",
     "Actor2Name",
@@ -41,6 +44,7 @@ EVENT_COLUMNS: tuple[str, ...] = (
     "Actor2Type1Code",
     "Actor2Type2Code",
     "Actor2Type3Code",
+
     # --- Event action ---
     "IsRootEvent",
     "EventCode",
@@ -52,6 +56,7 @@ EVENT_COLUMNS: tuple[str, ...] = (
     "NumSources",
     "NumArticles",
     "AvgTone",
+
     # --- Actor 1 geography ---
     "Actor1Geo_Type",
     "Actor1Geo_FullName",
@@ -61,6 +66,7 @@ EVENT_COLUMNS: tuple[str, ...] = (
     "Actor1Geo_Lat",
     "Actor1Geo_Long",
     "Actor1Geo_FeatureID",
+
     # --- Actor 2 geography ---
     "Actor2Geo_Type",
     "Actor2Geo_FullName",
@@ -70,6 +76,7 @@ EVENT_COLUMNS: tuple[str, ...] = (
     "Actor2Geo_Lat",
     "Actor2Geo_Long",
     "Actor2Geo_FeatureID",
+
     # --- Action geography (where the event happened) ---
     "ActionGeo_Type",
     "ActionGeo_FullName",
@@ -79,12 +86,13 @@ EVENT_COLUMNS: tuple[str, ...] = (
     "ActionGeo_Lat",
     "ActionGeo_Long",
     "ActionGeo_FeatureID",
+
     # --- Data management ---
     "DATEADDED",
     "SOURCEURL",
 )
 
-# Subset of columns that the country-day aggregation actually needs
+# Subset of columns that the country-day aggregation needs
 USED_COLUMNS: tuple[str, ...] = (
     "GlobalEventID",
     "Day",
@@ -108,8 +116,7 @@ USED_COLUMNS: tuple[str, ...] = (
     "SOURCEURL",
 )
 
-# CAMEO event root codes
-# Root code is the first 2 digits of EventCode (gives the coarse category) 
+# CAMEO event root codes (oot code is the first 2 digits of EventCode)
 CAMEO_ROOT_LABELS: dict[str, str] = {
     "01": "Make public statement",
     "02": "Appeal",

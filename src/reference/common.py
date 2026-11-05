@@ -1,20 +1,43 @@
 """
-Shared pieces for the reference-data loaders.
+Shared functions used by all reference-data loaders.
 
-Every loader returns the same long table, one row per country, year and
-variable:
+Different data sources provide country information in different
+formats. This module makes sure they all use the same table
+structure so their data can be stored and used together.
 
-    iso3, year, variable, source, value, sd, low, high, interval
+Each row represents one country, one year and one variable.
 
-    value     the point estimate
-    sd        its standard deviation (WGI: standard error) -- comparable
-              across sources, so this is what uncertainty bands should use
-    low/high  the source's own uncertainty bounds
-    interval  how wide those bounds are, e.g. 0.90 for a 90% interval;
-              missing if the source does not say
+The standard table contains:
 
-A long table means a new variable is a new set of rows, not a new column,
-so the database never needs rebuilding when the criteria change.
+    iso3       Country code
+    year       Year of the observation
+    variable   Name of the indicator
+    source     Where the data came from
+    value      The measured value
+    sd         Standard deviation or standard error
+    low/high   Lower and upper uncertainty limits
+    interval   Confidence level of those limits, where available
+
+Using this format means new indicators can be added as new rows
+without changing the database structure.
+
+The module also checks country codes and prevents duplicate data:
+
+    known_iso3()
+        Returns the country codes recognised by the project.
+
+    check_codes()
+        Checks that every country code is recognised.
+        Known non-country entries can be deliberately excluded.
+        Unexpected codes stop the import rather than silently
+        dropping countries.
+
+    check_unique()
+        Checks that each country, year and indicator combination
+        appears only once.
+
+These checks help ensure that reference data from different
+sources can be safely combined.
 """
 
 from __future__ import annotations
@@ -52,10 +75,6 @@ def check_codes(
     """
     Return True for rows whose code is a known ISO3 code, False for rows
     whose code is on the dropped list, and raise for anything else.
-
-    Like the GDELT crosswalk, this stops on purpose: a code that matches
-    nothing would otherwise make a country silently disappear from the
-    join.
     """
     recognised = known_iso3() | set(dropped)
     unknown = codes[~codes.isin(recognised)]
@@ -66,14 +85,17 @@ def check_codes(
             .drop_duplicates("code")
             .sort_values("code")
         )
+
         listing = ", ".join(
             f"{r.code} ({r.name})" for r in examples.itertuples()
         )
+
         raise UnknownReferenceCode(
             f"{source}: country codes that match no ISO3 code: {listing}. "
             "Add each to fips_iso3.csv if it is a country GDELT also "
             f"uses, or to the {source} loader's DROPPED list if not."
         )
+    
     return codes.isin(known_iso3())
 
 
@@ -82,8 +104,10 @@ def check_unique(table: pd.DataFrame, source: str) -> None:
     Each (iso3, year, variable) must appear once.
     """
     repeats = table.duplicated(["iso3", "year", "variable"], keep=False)
+
     if repeats.any():
         sample = table.loc[repeats, ["iso3", "year", "variable"]].head(6)
+        
         raise ValueError(
             f"{source}: repeated country-year-variable rows:\n"
             f"{sample.to_string(index=False)}"

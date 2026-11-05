@@ -19,8 +19,7 @@ What it does for each day:
        a range)
     5. Saves the table to the database
 
-A day that is already stored as complete is skipped, so the same command
-can be run every day and only the missing days are pulled.
+A day that is already stored as complete is skipped.
 """
 
 from __future__ import annotations

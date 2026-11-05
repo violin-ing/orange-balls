@@ -176,7 +176,7 @@ def test_vdem_missing_column_is_reported() -> None:
         raise AssertionError("a missing column should raise")
 
 
-# -------------------------------------------------------- World Bank
+# === WORLD BANK ===
 
 def make_worldbank(folder: Path) -> Path:
     name = "API_NY.GDP.PCAP.PP.KD_DS2_en_csv_v2_1.csv"
@@ -194,7 +194,7 @@ def make_worldbank(folder: Path) -> Path:
         "2020": [45000.0, 17000.0, None, 55000.0],
         "2021": [46000.0, 18000.0, 9000.0, 56000.0],
     })
-    values["Unnamed"] = ""        # the download ends each line with a comma
+    values["Unnamed"] = "" # download ends each line with a comma
     path = folder / name
     path.write_text(header + values.to_csv(index=False), encoding="utf-8")
     pd.DataFrame({
@@ -202,14 +202,18 @@ def make_worldbank(folder: Path) -> Path:
         "Region": ["Europe & Central Asia", "", "Sub-Saharan Africa",
                    "Europe & Central Asia"],
     }).to_csv(folder / f"Metadata_Country_{name}", index=False)
+
     return path
 
 
 def test_worldbank_drops_totals_and_old_years() -> None:
     table = load_worldbank(make_worldbank(temp_dir()))
     assert list(table.columns) == REFERENCE_COLUMNS
+
     found = [(r.iso3, r.year, r.value) for r in table.itertuples()]
-    # WLD (a total) and CHI (dropped) are gone; 1999 is before min_year;
+    
+    # WLD (a total) and CHI (dropped) are gone
+    # 1999 is before min_year
     # Namibia's missing 2020 value is left out
     assert found == [
         ("GBR", 2020, 45000.0),
@@ -220,7 +224,7 @@ def test_worldbank_drops_totals_and_old_years() -> None:
     assert table["sd"].isna().all()
 
 
-# ------------------------------------------------------ the variables
+# === VARIABLES ===
 
 def test_directions_match_the_codebooks() -> None:
     """From the V-Dem v16 codebook answer scales; see variables.py."""
@@ -243,7 +247,7 @@ def test_directions_match_the_codebooks() -> None:
     assert roles["gdp_pc"] == "validation"
 
 
-# --------------------------------------------- selecting and joining
+# === SELECTING AND JOINING ===
 
 def make_reference() -> pd.DataFrame:
     folder = temp_dir()
@@ -281,7 +285,7 @@ def test_join_keeps_every_country_day() -> None:
     assert coverage["events_without_reference"] == 6
 
 
-# ------------------------------------------------------- the database
+# === DATABASE ===
 
 def test_reference_is_saved_and_replaced_by_source() -> None:
     reference = make_reference()
