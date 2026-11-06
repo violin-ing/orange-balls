@@ -1,5 +1,5 @@
 """
-Every method choice in scoring, in one object.
+Every method choice in scoring in one object.
 
 Each function in src/score/ takes a Settings.
 
