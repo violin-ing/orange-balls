@@ -5,46 +5,42 @@ Run from the repository root:
 
     python -m tests.score_test
 
-The tests use small, made-up datasets rather than the real database.
-This makes them quick to run and ensures the results are predictable.
+The tests use small, made-up datasets rather than the real database. This makes
+them faster to run and ensures the results are predictable.
 
 The tests cover:
 
     1. Settings
-       Checks that valid settings are accepted and invalid
-       combinations are rejected.
+       Checks that valid settings are accepted and invalid combinations are
+       rejected.
 
     2. GDELT event counts
-       Checks how events are counted, including unrest severity
-       weights, media targeting and denominator choices.
+       Checks how events are counted, including unrest severity weights, media
+       targeting and denominator choices.
 
     3. GDELT indicator calculations
-       Checks historical comparisons, smoothing, media pressure,
-       uncertainty and handling of countries with few or no events.
+       Checks historical comparisons, smoothing, media pressure, uncertainty
+       and handling of countries with few or no events.
 
     4. Normalisation
-       Checks that indicators are put onto a common scale,
-       correctly adjusted so higher always means better, and
-       handled correctly when values fall outside the reference limits.
+       Checks that indicators are put onto a common scale, correctly adjusted
+       so higher always means better, and handled correctly when values fall
+       outside the reference limits.
 
     5. Combining indicators
-       Checks that weights, arithmetic and geometric averages,
-       missing data and standard errors are handled correctly.
+       Checks that weights, arithmetic and geometric averages, missing data and
+       standard errors are handled correctly.
 
     6. Reference limits
-       Checks how fixed limits are calculated, stored and linked
-       to the correct GDELT settings.
+       Checks how fixed limits are calculated, stored and linked to the correct
+       GDELT settings.
 
     7. Complete country assessments
-       Checks that the full process works, from individual
-       indicators through to the final country score.
+       Checks that the full process works, from individual indicators through
+       to the final country score.
 
-The tests also check that missing history, invalid settings and
-undefined results are caught rather than allowed to produce
-unreliable country scores.
-
-Each test reports its result. The script finishes by confirming
-how many tests passed.
+The tests also check that missing history, invalid settings and undefined
+results are caught rather than allowed to produce unreliable country scores.
 """
 
 from __future__ import annotations
@@ -134,14 +130,16 @@ def test_unrest_denominator_uses_the_same_filter() -> None:
     })
     codes = pd.DataFrame({
         "iso3": "USA", "date": d,
-        "event_code": ["141", "190", "173", "010", "010"],
+        "event_code": ["141", "190", "173", "010", "010", "190"],
         "relation": ["domestic", "domestic", "domestic", "domestic",
-                     "foreign"],
-        "media_target": [0, 0, 0, 0, 0],
-        "n_events": [3, 2, 4, 31, 60],
+                     "foreign", "domestic"],
+        "media_target": [0, 0, 0, 0, 0, 0],
+        # the last row is not from a lead paragraph
+        "is_root": [1, 1, 1, 1, 1, 0],
+        "n_events": [3, 2, 4, 31, 60, 6],
 
         # Goldstein is fixed per code: 141 -6.5, 190 -10, 173 -5, 010 0
-        "goldstein_sum": [-19.5, -20.0, -20.0, 0.0, 0.0],
+        "goldstein_sum": [-19.5, -20.0, -20.0, 0.0, 0.0, -60.0],
     })
     def unrest(**changes):
         settings = Settings(unrest_weighting="count", **changes)
@@ -159,6 +157,12 @@ def test_unrest_denominator_uses_the_same_filter() -> None:
     # The "all" denominator includes every located event
     assert unrest(unrest_denominator="all") == (5, 100)
 
+    # Without the lead-paragraph filter, the last row counts on both
+    # sides: 5 + 6 out of 40 + 6
+    assert unrest(unrest_root_only=False) == (11, 46)
+    assert unrest(unrest_root_only=False,
+                  unrest_denominator="all") == (11, 106)
+
     counts = build_counts(country_day, codes, Settings())
     conflict = counts[counts["criterion"] == "intl_conflict"].iloc[0]
     assert (conflict["k"], conflict["n"]) == (5, 80)
@@ -173,7 +177,7 @@ UNREST_DAY = pd.DataFrame({
 UNREST_CODES = pd.DataFrame({
     "iso3": "USA", "date": pd.Timestamp(DAY),
     "event_code": ["141", "145", "190", "173", "010"],
-    "relation": "domestic", "media_target": 0,
+    "relation": "domestic", "media_target": 0, "is_root": 1,
     "n_events": [3, 1, 2, 4, 30],
     "goldstein_sum": [-19.5, -7.5, -20.0, -20.0, 0.0],
 })
@@ -203,6 +207,17 @@ def test_unrest_is_weighted_by_severity_tier() -> None:
 def test_goldstein_weighting_is_a_sensitivity_variant() -> None:
     row = unrest_row(Settings(unrest_weighting="goldstein"))
     assert abs(row["k"] - (3 * 0.65 + 1 * 0.75 + 2 * 1.0)) < 1e-12
+
+
+def test_a_table_without_is_root_is_refused() -> None:
+    """
+    A database built before the filter existed must be rebuilt.
+    """
+    old = UNREST_CODES.drop(columns="is_root")
+    expect_error(ValueError, build_counts, UNREST_DAY, old, Settings(),
+                 contains="is_root")
+    # the unfiltered variant does not need the column
+    build_counts(UNREST_DAY, old, Settings(unrest_root_only=False))
 
 
 def test_tiers_use_the_longest_matching_prefix() -> None:
@@ -633,8 +648,16 @@ def test_a_whole_run_scores_every_country() -> None:
     assert result.reference_year == DAY.year - 1
     assert list(result.values.columns) == list(FAST_CRITERIA) + SLOW
     assert sorted(result.scores.index) == ["BIG", "MID", "SMALL"]
-    assert (result.scores["n_criteria"] == 9).all()
+    # ten criteria: four GDELT and six structural
+    assert len(FAST_CRITERIA) + len(SLOW) == 10
+    assert (result.scores["n_criteria"] == 10).all()
     assert np.isfinite(result.scores[["score", "score_se"]]).all().all()
+
+    # every country gets an internal band, with a range around it
+    bands = result.scores[["band_low", "band", "band_high"]]
+    assert bands.isin([1, 2, 3, 4, 5]).all().all()
+    assert (bands["band_low"] <= bands["band"]).all()
+    assert (bands["band"] <= bands["band_high"]).all()
 
     # BIG should score higher than MID overall.
     # Shutdown capacity is the exception: lower values are better.
@@ -649,14 +672,15 @@ def test_a_whole_run_scores_every_country() -> None:
 
 def test_a_run_can_score_the_structural_criteria_only() -> None:
     """
-    Nine criteria versus the slow five.
+    Ten criteria versus the six structural ones only.
     """
     settings = Settings(criteria=tuple(SLOW))
     result = score_countries(make_score_inputs(Settings()), DAY, settings)
 
     assert list(result.values.columns) == SLOW
     assert result.fast.empty
-    assert (result.scores["n_criteria"] == 5).all()
+    assert len(SLOW) == 6
+    assert (result.scores["n_criteria"] == 6).all()
 
 
 def test_unknown_or_validation_criteria_are_refused() -> None:
@@ -678,6 +702,7 @@ def main() -> None:
         test_unrest_denominator_uses_the_same_filter,
         test_unrest_is_weighted_by_severity_tier,
         test_goldstein_weighting_is_a_sensitivity_variant,
+        test_a_table_without_is_root_is_refused,
         test_tiers_use_the_longest_matching_prefix,
         test_zero_baseline_still_gives_a_defined_value,
         test_zero_expected_without_smoothing_is_refused,

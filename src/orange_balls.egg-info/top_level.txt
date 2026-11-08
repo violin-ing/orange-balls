@@ -1,8 +1,10 @@
-cli
+compute_bounds
 countries
 gdelt
 load_reference
 pull_day
 reference
+run_sensitivity
+score
 store
 transform

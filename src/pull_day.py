@@ -131,10 +131,18 @@ def print_unrest_by_code(codes: pd.DataFrame, limit: int = 10) -> None:
         events=("n_events", "sum"), goldstein=("goldstein_sum", "sum")
     )
     by_code["per_event"] = by_code["goldstein"] / by_code["events"]
+
+    # Share from an article's lead paragraph (what the unrest filter keeps)
+    lead = domestic[domestic["is_root"] == 1]
+    by_code["lead_share"] = (
+        lead.groupby("event_code")["n_events"].sum()
+        .reindex(by_code.index, fill_value=0) / by_code["events"]
+    )
     top = by_code.sort_values("events", ascending=False).head(limit)
 
     print(f"\n--- event code table: {len(codes):,} rows; most common full "
-          "codes in loose unrest ---")
+          "codes in loose unrest (lead_share = share from a lead "
+          "paragraph) ---")
     
     print(top.to_string(float_format="{:.1f}".format))
 
@@ -331,7 +339,7 @@ def main() -> None:
 
     connection = None if args.no_save else connect(DB_PATH)
     try:
-        # Days already stored as complete do not need pulling again
+        # Days already stored as complete don't need pulling again
         already: set[str] = set()
         if connection is not None and not args.force:
             log = load_pull_log(connection)

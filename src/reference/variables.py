@@ -52,8 +52,13 @@ Data sources:
         shutdown capacity and other political conditions.
 
     Digital Society Project
-        Provides additional indicators of disinformation and
-        social polarisation.
+        Provides indicators of disinformation: government
+        dissemination of false information is a criterion (it bears
+        on the Declaration's rumour-management provision); party
+        dissemination is a candidate kept for sensitivity analysis.
+        Polarisation of society (v2smpolsoc) was considered and
+        excluded: it measures general polarisation, not the
+        information environment (decision log 11.7).
 
     WGI (Worldwide Governance Indicators)
         Provides measures of government effectiveness and
@@ -130,19 +135,13 @@ VARIABLES: dict[str, Variable] = {
             "v2smgovdom", "vdem", "v2smgovdom",
             "Government dissemination of false information, domestic "
             "(high = less)",
-            higher_is_better=True, role="candidate",
+            higher_is_better=True,
         ),
 
         Variable(
             "v2smpardom", "vdem", "v2smpardom",
             "Party dissemination of false information, domestic "
             "(high = less)",
-            higher_is_better=True, role="candidate",
-        ),
-
-        Variable(
-            "v2smpolsoc", "vdem", "v2smpolsoc",
-            "Polarization of society (high = less polarized)",
             higher_is_better=True, role="candidate",
         ),
 

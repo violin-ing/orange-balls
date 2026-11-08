@@ -32,10 +32,13 @@ It calculates limits for two types of indicators:
 The calculated limits are saved in the database, replacing
 previous limits for the same indicators and settings.
 
-Default periods:
+Default periods (the reference periods decided in decision log 11.13):
 
-    Structural data: 2000 to the latest year available.
-    GDELT data:      All completely pulled days.
+    Structural data: 2000 to the latest year of structural data loaded.
+    GDELT data:      All completely pulled days. A 180-day pull gives about
+                     90 usable reference days, since each needs about 90
+                     days of history before it. Fewer than
+                     MIN_FAST_REFERENCE_DAYS prints a warning.
 
 Options:
 
@@ -59,6 +62,7 @@ from datetime import date
 
 import pandas as pd
 
+from src.reference.variables import with_role
 from src.score.bounds import (
     fast_bounds,
     fast_reference_values,
@@ -74,6 +78,9 @@ from src.store.database import (
     load_reference,
     save_bounds,
 )
+
+SLOW_REFERENCE_FIRST_YEAR = 2000
+MIN_FAST_REFERENCE_DAYS = 60
 
 
 def main() -> None:
@@ -97,7 +104,12 @@ def main() -> None:
         if reference.empty:
             raise SystemExit("no reference data: run src.load_reference")
         
-        first, last = args.slow_years or (2000, int(reference["year"].max()))
+        # Latest year of the scored structural variables, not of the
+        # validation data (GDP may run a year further)
+        scored = reference[~reference["variable"].isin(
+            with_role("validation"))]
+        first, last = args.slow_years or (
+            SLOW_REFERENCE_FIRST_YEAR, int(scored["year"].max()))
         slow = slow_bounds(reference, first, last)
 
         print(f"structural bounds, years {first} to {last}:")
@@ -134,6 +146,13 @@ def main() -> None:
         
         print(fast[["criterion", "method", "lower", "upper"]]
               .round(4).to_string(index=False))
+
+        used = len(days) - len(skipped)
+        if used < MIN_FAST_REFERENCE_DAYS:
+            print(f"\nWARNING: only {used} reference days (fewer than "
+                  f"{MIN_FAST_REFERENCE_DAYS}). The percentile caps rest on "
+                  "little data; pull more days (about 180 in total) and "
+                  "run this again.")
         
         save_bounds(connection, fast)
 

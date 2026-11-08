@@ -1,42 +1,42 @@
 """
-Stores the project's country-day data, reference data and scoring bounds
-in a SQLite database.
+Stores the project's country-day data, reference data and scoring bounds in a
+SQLite database.
 
-SQLite stores the database in a single file and is included with Python,
-so no separate database software is needed.
+SQLite stores the database in a single file and is included with Python, so no
+separate database software is needed.
 
 The database contains six tables:
     
     1. country_day: daily totals and measurements for each country
     
-    2. event_code_day: daily event counts grouped by event code, relation
-       and whether the event targeted the media
+    2. event_code_day: daily event counts grouped by event code, relation and
+        whether the event targeted the media
     
-    3. pull_log: a record of each day's data download, including file
-       counts, dropped rows and unmatched actor codes
+    3. pull_log: a record of each day's data download, including file counts, 
+        dropped rows and unmatched actor codes
     
-    4. reference: yearly V-Dem and WGI indicator values and uncertainty
-       information
+    4. reference: yearly V-Dem and WGI indicator values and uncertainty info
     
-    5. reference_file: the file used for each reference source, its
-       SHA-256 checksum and loading details
+    5. reference_file: the file used for each reference source, its SHA-256 
+        checksum and loading details
     
-    6. norm_bounds: fixed normalisation bounds for each criterion and
-       settings variant
+    6. norm_bounds: fixed normalisation bounds for each criterion and settings 
+        variant
 
 Important details:
-    - Saving a day replaces any existing data for that day, rather
-      than creating duplicates.
-    - Only country-level totals and grouped event counts are stored.
-      Article text and addresses are not saved.
+    - Saving a day replaces any existing data for that day, rather than
+        creating duplicates.
+    - Only country-level totals and grouped event counts are stored. Article
+        text and addresses are not saved.
     - Dates are stored as YYYY-MM-DD text.
-    - Database tables are checked against the current code. If their
-      columns do not match, the loader raises SchemaMismatch.
+    - Database tables are checked against the current code. If their columns do
+        not match, the loader raises SchemaMismatch.
 
-The functions in this module create and connect to the database, save
-and load daily data, record reference files, and save and load
-normalisation bounds. Data changes are saved in transactions so a
-failed write does not leave only part of an update in the database.
+The functions in this module create and connect to the database, save and load
+daily data, record reference files, and save and load normalisation bounds.
+
+Data changes are saved in transactions so a failed write does not leave only
+part of an update in the database (atomicity).
 """
 
 from __future__ import annotations
@@ -145,10 +145,12 @@ def connect(path: Path | str = DB_PATH) -> sqlite3.Connection:
             event_code TEXT NOT NULL,
             relation TEXT NOT NULL,
             media_target INTEGER NOT NULL,
+            is_root INTEGER NOT NULL,
             n_events INTEGER NOT NULL,
             n_articles INTEGER NOT NULL,
             goldstein_sum REAL NOT NULL,
-            PRIMARY KEY (iso3, date, event_code, relation, media_target)
+            PRIMARY KEY (iso3, date, event_code, relation, media_target,
+                         is_root)
         )
     """)
 
@@ -281,24 +283,25 @@ def save_day(
     if (sorted(table.columns) != sorted(TABLE_COLUMNS)
         or len(table.columns) != len(TABLE_COLUMNS)):
         raise ValueError(
-            "table columns do not match the database. "
+            "Table columns do not match the database. "
             f"Missing: {sorted(set(TABLE_COLUMNS) - set(table.columns))}, "
             f"unexpected: {sorted(set(table.columns) - set(TABLE_COLUMNS))}"
         )
+    
     attrs = table.attrs
     table = table[TABLE_COLUMNS]
     table.attrs = attrs
     
     if codes is not None and list(codes.columns) != EVENT_CODE_COLUMNS:
         raise ValueError(
-            f"event code table columns should be {EVENT_CODE_COLUMNS}, "
+            f"Event code table columns should be {EVENT_CODE_COLUMNS}, "
             f"got {list(codes.columns)}"
         )
 
     dropped = table.attrs.get("dropped")
     if dropped is None:
         raise ValueError(
-            "table has no record of dropped rows (table.attrs['dropped'])"
+            "Table has no record of dropped rows (table.attrs['dropped'])"
         )
     
     unmatched = table.attrs.get("actor_codes_unmatched", {})
@@ -427,7 +430,8 @@ def load_event_codes(
     where, values = _where(start, end, iso3)
     query = (
         f"SELECT {', '.join(EVENT_CODE_COLUMNS)} FROM event_code_day "
-        f"{where} ORDER BY date, iso3, event_code, relation, media_target"
+        f"{where} ORDER BY date, iso3, event_code, relation, media_target, "
+        "is_root"
     )
 
     table = pd.read_sql_query(query, connection, params=values)
@@ -441,7 +445,6 @@ def load_pull_log(connection: sqlite3.Connection) -> pd.DataFrame:
     Read the record of every day pulled, oldest first.
     """
     query = f"SELECT {', '.join(LOG_COLUMNS)} FROM pull_log ORDER BY date"
-
     return pd.read_sql_query(query, connection)
 
 
@@ -453,14 +456,14 @@ def save_reference(
         sha256: str,
     ) -> int:
     """
-    Replace every stored row of one source ("vdem" or "wgi") with table,
-    and record which file it came from.
+    Replace every stored row of one source ("vdem" or "wgi") with table, and
+    record which file it came from.
 
     Returns the number of rows written.
     """
     if list(table.columns) != REFERENCE_COLUMNS:
         raise ValueError(
-            f"reference table columns should be {REFERENCE_COLUMNS}, "
+            f"Reference table columns should be {REFERENCE_COLUMNS}, "
             f"got {list(table.columns)}"
         )
     
@@ -505,8 +508,8 @@ def load_reference(
         end_year: int | None = None,
     ) -> pd.DataFrame:
     """
-    Read stored reference rows back, optionally for some variables and
-    years only (both years included).
+    Read stored reference rows back, optionally for some variables and years
+    only (both years included).
     """
     conditions: list[str] = []
     values: list[object] = []
@@ -526,6 +529,7 @@ def load_reference(
         values.append(end_year)
 
     where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
+
     query = (
         f"SELECT {', '.join(REFERENCE_COLUMNS)} FROM reference {where} "
         "ORDER BY variable, year, iso3"
@@ -553,14 +557,14 @@ def save_bounds(connection: sqlite3.Connection, table: pd.DataFrame) -> int:
     """
     if list(table.columns) != BOUNDS_COLUMNS:
         raise ValueError(
-            f"bounds table columns should be {BOUNDS_COLUMNS}, "
+            f"Bounds table columns should be {BOUNDS_COLUMNS}, "
             f"got {list(table.columns)}"
         )
     
     bad = table[table["upper"] <= table["lower"]]
     if not bad.empty:
         raise ValueError(
-            "upper bound not above lower bound:\n"
+            "Upper bound not above lower bound:\n"
             f"{bad[['criterion', 'lower', 'upper']].to_string(index=False)}"
         )
     

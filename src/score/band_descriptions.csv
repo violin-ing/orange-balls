@@ -1,0 +1,11 @@
+band,audience,internal_bands,label,action,status
+1,internal,1,Severe constraints,"Route notification through international bodies rather than national channels; coordinate with local law enforcement; run active rumour management from first notice",draft
+2,internal,2,Significant constraints,"Notify national authorities and international bodies together; prepare rumour-management statements before announcement; coordinate with local law enforcement",draft
+3,internal,3,Moderate constraints,"Notify national authorities directly; consult them on the timing of the announcement; monitor for rumours and correct them as they arise",draft
+4,internal,4,Minor constraints,"Notify national authorities directly; announce through official and media channels; monitor for rumours",draft
+5,internal,5,Favourable conditions,"Notify and announce through normal official and media channels; routine monitoring",draft
+1,public,1,Information through international channels,"Expect first information from international bodies rather than national ones; expect heightened law enforcement activity; expect frequent official corrections of false reports",draft
+2,public,2,Coordinated official information,"Expect national and international bodies to speak together; expect heightened law enforcement activity; expect prepared official statements",draft
+3,public,3,National official information,"Expect national authorities to inform the public; expect corrections of false reports as they appear",draft
+4,public,4,Normal official information,"Expect the announcement through official and media channels",draft
+5,public,5,Normal official information,"Expect the announcement through normal official and media channels",draft

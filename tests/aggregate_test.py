@@ -57,6 +57,9 @@ def make_events() -> pd.DataFrame:
 
     Codes: 141 is "demonstrate", 173 is "arrest", 172 is "impose
     administrative sanctions".
+
+    Every event is from an article's lead paragraph (IsRootEvent 1)
+    except event 3, the arrest.
     """
     rows = [
         # id, DATEADDED, FIPS, root, quad, goldstein, mentions, articles,
@@ -80,24 +83,30 @@ def make_events() -> pd.DataFrame:
         (4, "20261005200000", "NI", "19", 4, -10.0, 4, 2, -5.0,
          "NGA", "USA", None),
     ]
+    
     frame = pd.DataFrame(rows, columns=[
         "GlobalEventID", "DATEADDED", "ActionGeo_CountryCode",
         "EventRootCode", "QuadClass", "GoldsteinScale",
         "NumMentions", "NumArticles", "AvgTone",
         "Actor1CountryCode", "Actor2CountryCode", "Actor2Type1Code",
     ])
+
     frame["EventCode"] = frame["GlobalEventID"].map({
         1: "010", 2: "141", 3: "173", 4: "190",
         5: "010", 6: "010", 7: "010", 9: "172",
     })
+
     frame["Actor1Type1Code"] = frame["GlobalEventID"].map({5: "IGO"})
     frame["Actor1Type2Code"] = None
     frame["Actor1Type3Code"] = None
     frame["Actor2Type2Code"] = None
     frame["Actor2Type3Code"] = None
-    # Day is deliberately a year earlier. It must not affect the result.
+    frame["IsRootEvent"] = (frame["GlobalEventID"] != 3).astype("int64")
+
+    # Day is a year earlier (must not affect result)
     frame["Day"] = "20251005"
     frame["SOURCEURL"] = "http://example.com/some-persons-name"
+
     text_columns = (
         "DATEADDED", "ActionGeo_CountryCode", "EventCode",
         "EventRootCode", "Day",
@@ -105,21 +114,26 @@ def make_events() -> pd.DataFrame:
         "Actor1Type1Code", "Actor1Type2Code", "Actor1Type3Code",
         "Actor2Type1Code", "Actor2Type2Code", "Actor2Type3Code",
     )
+
     for column in text_columns:
         frame[column] = frame[column].astype("string")
+
     return frame
 
 
 def get_row(table: pd.DataFrame, iso3: str, day: str) -> pd.Series:
     same_country = table["iso3"] == iso3
     same_day = table["date"] == pd.Timestamp(day)
+
     match = table[same_country & same_day]
     assert len(match) == 1, f"expected one row, got {len(match)}"
+
     return match.iloc[0]
 
 
 def test_one_row_per_country_day() -> None:
     table = to_country_day(make_events())
+
     found = [(r.iso3, str(r.date.date())) for r in table.itertuples()]
     assert found == [
         ("DEU", "2026-10-05"),
@@ -134,38 +148,45 @@ def test_one_row_per_country_day() -> None:
 def test_totals_and_averages() -> None:
     usa = get_row(to_country_day(make_events()), "USA", "2026-10-05")
 
-    assert usa["n_events"] == 4              # events 1, 2, 3 and 9
-    assert usa["n_mentions"] == 12           # 2 + 6 + 2 + 2
-    assert usa["n_articles"] == 7            # 1 + 3 + 1 + 2
+    assert usa["n_events"] == 4 # events 1, 2, 3 and 9
+    assert usa["n_mentions"] == 12 # 2 + 6 + 2 + 2
+    assert usa["n_articles"] == 7 # 1 + 3 + 1 + 2
+
     # (1 - 3 - 1 - 4) / 4
     assert abs(usa["tone_mean"] - (-1.75)) < 1e-9
+
     # (1*1 + -3*3 + -1*1 + -4*2) / (1 + 3 + 1 + 2) = -17 / 7
     assert abs(usa["tone_mean_weighted"] - (-17 / 7)) < 1e-9
+
     # (2 - 6 - 5 - 5) / 4
     assert abs(usa["goldstein_mean"] - (-3.5)) < 1e-9
 
 
 def test_counts_per_code() -> None:
     usa = get_row(to_country_day(make_events()), "USA", "2026-10-05")
-
     assert usa["root_01"] == 1 and usa["root_14"] == 1
-    assert usa["root_17"] == 2              # events 3 and 9
-    assert usa["root_19"] == 0              # absent codes are 0, not missing
+    assert usa["root_17"] == 2 # events 3 and 9
+    assert usa["root_19"] == 0 # absent codes are 0, not missing
     assert usa["quad_1"] == 1 and usa["quad_3"] == 1 and usa["quad_4"] == 2
     assert usa["root_other"] == 0
 
 
 def test_all_code_columns_always_exist() -> None:
     table = to_country_day(make_events())
+
     for number in range(1, 21):
         assert f"root_{number:02d}" in table.columns
+
     for number in range(1, 5):
         assert f"quad_{number}" in table.columns
 
 
 def test_counts_add_up() -> None:
-    """Every event lands in exactly one root column and one quad column."""
+    """
+    Every event lands in exactly one root column and one quad column.
+    """
     table = to_country_day(make_events())
+
     root_columns = [c for c in table.columns if c.startswith("root_")]
     quad_columns = [c for c in table.columns if c.startswith("quad_")]
     assert (table[root_columns].sum(axis=1) == table["n_events"]).all()
@@ -175,6 +196,7 @@ def test_counts_add_up() -> None:
 def test_unusual_root_code_is_counted_as_other() -> None:
     events = make_events()
     events.loc[events["GlobalEventID"] == 1, "EventRootCode"] = "--"
+
     usa = get_row(to_country_day(events), "USA", "2026-10-05")
     assert usa["root_01"] == 0 and usa["root_other"] == 1
     assert usa["n_events"] == 4
@@ -187,10 +209,12 @@ def test_unrest_strict_and_loose() -> None:
 
     # Strict: event 2 only (protest, domestic)
     assert usa["unrest_events"] == 1 and usa["unrest_articles"] == 3
-    # Loose adds event 3 (an arrest). Event 9 is also root 17 and
-    # domestic, but its target is media, so it is left out.
+
+    # Loose adds event 3 (an arrest)
+    # Event 9 is also root 17 and domestic, but its target is media => exclude
     assert usa["unrest_loose_events"] == 2
-    assert usa["unrest_loose_articles"] == 4     # 3 + 1
+    assert usa["unrest_loose_articles"] == 4 # 3 + 1
+
     # Event 4 is a fight in Nigeria, but actor 2 is the United States
     assert nga["unrest_events"] == 0 and nga["unrest_loose_events"] == 0
 
@@ -201,6 +225,7 @@ def test_unrest_needs_a_domestic_actor() -> None:
     """
     events = make_events()
     events.loc[events["GlobalEventID"] == 2, "Actor1CountryCode"] = None
+
     usa = get_row(to_country_day(events), "USA", "2026-10-05")
     assert usa["unrest_events"] == 0
 
@@ -211,6 +236,7 @@ def test_media_events_are_not_counted_as_unrest() -> None:
     """
     events = make_events()
     events.loc[events["GlobalEventID"] == 9, "Actor2Type1Code"] = None
+
     usa = get_row(to_country_day(events), "USA", "2026-10-05")
     assert usa["unrest_loose_events"] == 3
     assert usa["media_pressure_events"] == 0
@@ -218,9 +244,11 @@ def test_media_events_are_not_counted_as_unrest() -> None:
 
 def test_media_pressure() -> None:
     table = to_country_day(make_events())
+
     usa = get_row(table, "USA", "2026-10-05")
     assert usa["media_pressure_events"] == 1 # event 9
     assert usa["media_pressure_articles"] == 2
+
     assert get_row(table, "NGA", "2026-10-05")["media_pressure_events"] == 0
 
 
@@ -229,6 +257,7 @@ def test_media_code_in_second_type_slot_counts() -> None:
     is_nine = events["GlobalEventID"] == 9
     events.loc[is_nine, "Actor2Type1Code"] = "GOV"
     events.loc[is_nine, "Actor2Type2Code"] = "MED"
+
     usa = get_row(to_country_day(events), "USA", "2026-10-05")
     assert usa["media_pressure_events"] == 1
 
@@ -267,7 +296,7 @@ def test_country_seen_only_as_actor_gets_a_row() -> None:
 
 def test_igo_counts_for_the_country_only() -> None:
     table = to_country_day(make_events())
-    assert "EUR" not in table["iso3"].tolist() # never a row of its own
+    assert "EUR" not in table["iso3"].tolist()
     assert table.attrs["actor_codes_unmatched"] == {"EUR": 1}
 
     # Cooperation between the EU (typed IGO) and Nigeria counts for Nigeria
@@ -333,17 +362,19 @@ def test_event_code_table() -> None:
     codes = to_event_code_day(make_events())
     found = [
         (r.iso3, str(r.date.date()), r.event_code, r.relation,
-         r.media_target, r.n_events, r.n_articles, r.goldstein_sum)
+         r.media_target, r.is_root, r.n_events, r.n_articles,
+         r.goldstein_sum)
         for r in codes.itertuples()
     ]
 
     assert found == [
-        ("NGA", "2026-10-05", "190", "foreign", 0, 1, 2, -10.0),
-        ("NGA", "2026-10-06", "010", "foreign", 0, 1, 4, 0.0),
-        ("USA", "2026-10-05", "010", "foreign", 0, 1, 1, 2.0),
-        ("USA", "2026-10-05", "141", "domestic", 0, 1, 3, -6.0),
-        ("USA", "2026-10-05", "172", "domestic", 1, 1, 2, -5.0),
-        ("USA", "2026-10-05", "173", "domestic", 0, 1, 1, -5.0),
+        ("NGA", "2026-10-05", "190", "foreign", 0, 1, 1, 2, -10.0),
+        ("NGA", "2026-10-06", "010", "foreign", 0, 1, 1, 4, 0.0),
+        ("USA", "2026-10-05", "010", "foreign", 0, 1, 1, 1, 2.0),
+        ("USA", "2026-10-05", "141", "domestic", 0, 1, 1, 3, -6.0),
+        ("USA", "2026-10-05", "172", "domestic", 1, 1, 1, 2, -5.0),
+        # the arrest is not from a lead paragraph
+        ("USA", "2026-10-05", "173", "domestic", 0, 0, 1, 1, -5.0),
     ], found
 
 

@@ -1,14 +1,13 @@
 """
-Calculates an overall score for each country by combining GDELT
-indicators with longer-term structural information.
+Calculates an overall score for each country by combining GDELT indicators with
+longer-term structural information.
 
 The process has two steps:
 
     inputs = load_score_inputs(connection, assessment_date, settings)
     result = score_countries(inputs, assessment_date, settings)
 
-First, load_score_inputs() collects everything needed from the
-database:
+First, load_score_inputs() collects everything needed from the database:
 
     - GDELT indicators for the assessment date.
     - Structural information for the chosen reference year.
@@ -26,28 +25,28 @@ Then score_countries() uses those inputs to:
 The indicators included in a run are controlled by Settings.criteria.
 
     Empty (default)
-        Uses all four GDELT indicators and all structural variables
-        marked as criteria.
+        Uses all four GDELT indicators and all structural variables marked as
+        criteria.
 
     A list of names
-        Uses only the selected indicators. This allows different
-        combinations to be tested, such as structural indicators
-        alone, to see whether adding GDELT improves the assessment.
+        Uses only the selected indicators. This allows different combinations
+        to be tested, such as structural indicators alone, to see whether
+        adding GDELT improves the assessment.
 
 Candidate variables can also be included when explicitly selected.
 Validation variables cannot be used as scoring criteria.
 
-The structural reference year is the assessment year minus
-reference_lag_years. GDELT indicators use the assessment date itself.
+The structural reference year is the assessment year minus reference_lag_years.
+GDELT indicators use the assessment date itself.
 
-The database is read only by load_score_inputs(). Once the inputs
-are loaded, score_countries() performs the calculations without
-further database access. This allows the same data to be rescored
-with different settings during sensitivity testing.
+The database is read only by load_score_inputs(). Once the inputs are loaded,
+score_countries() performs the calculations without further database access.
+This allows the same data to be rescored with different settings during
+sensitivity testing.
 
-The result contains the original indicator values, their standard
-errors, normalised values, the final country scores and supporting
-information about the calculation.
+The result contains the original indicator values, their standard errors,
+normalised values, the final country scores and supporting information about
+the calculation.
 
 Main functions:
 
@@ -73,6 +72,7 @@ from datetime import date
 import pandas as pd
 
 from src.reference.variables import VARIABLES, with_role
+from src.score.bands import assign_bands
 from src.score.bounds import SLOW_VARIANT, fast_variant
 from src.score.combine import aggregate, normalise
 from src.score.fast import (
@@ -102,7 +102,8 @@ class ScoreResult:
     ses: pd.DataFrame # their standard errors
     norm: pd.DataFrame # normalised, higher = better
     norm_se: pd.DataFrame
-    scores: pd.DataFrame # score, score_se, n_criteria
+    scores: pd.DataFrame # score, score_se, n_criteria, band, band_low,
+                         # band_high
     fast: pd.DataFrame # fast_criteria() output, with counts
     reference_year: int
     fast_variant: str
@@ -131,12 +132,14 @@ def chosen_criteria(settings: Settings) -> list[str]:
 
 def directions() -> dict[str, bool]:
     """
-    higher_is_better for every criterion, GDELT and structural.
+    Return whether higher values are better for each criterion.
     """
-    return {
-        **FAST_HIGHER_IS_BETTER,
-        **{n: v.higher_is_better for n, v in VARIABLES.items()},
-    }
+    result = FAST_HIGHER_IS_BETTER.copy()
+
+    for name, variable in VARIABLES.items():
+        result[name] = variable.higher_is_better
+
+    return result
 
 
 def load_score_inputs(
@@ -198,25 +201,33 @@ def score_countries(
     else:
         fast = pd.DataFrame(columns=["iso3", "criterion", "value", "se"])
 
-    both = pd.concat([slow[["iso3", "criterion", "value", "se"]],
-                      fast[["iso3", "criterion", "value", "se"]]],
-                     ignore_index=True)
+    both = pd.concat(
+        [slow[["iso3", "criterion", "value", "se"]],
+         fast[["iso3", "criterion", "value", "se"]]],
+         ignore_index=True
+    )
     
     values = _wide(both, "value", chosen).reindex(columns=chosen)
     
     ses = _wide(both, "se", chosen).reindex(columns=chosen)
 
     bounds = inputs.bounds
-    wanted = (
+
+    slow_rows = (
         (bounds["variant"] == SLOW_VARIANT)
         & bounds["criterion"].isin(slow_names)
-    ) | (
-        (bounds["variant"] == variant) & bounds["criterion"].isin(fast_names)
     )
+
+    fast_rows = (
+        (bounds["variant"] == variant)
+        & bounds["criterion"].isin(fast_names)
+    )
+
+    wanted = slow_rows | fast_rows
     bounds = bounds[wanted].set_index("criterion")
 
     norm, norm_se = normalise(values, ses, directions(), settings, bounds)
-    scores = aggregate(norm, norm_se, settings)
+    scores = assign_bands(aggregate(norm, norm_se, settings), settings)
 
     return ScoreResult(
         values=values, ses=ses, norm=norm, norm_se=norm_se,

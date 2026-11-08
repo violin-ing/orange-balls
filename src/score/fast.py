@@ -42,6 +42,11 @@ Media pressure is treated differently by default because these events are
 relatively rare and often absent on individual days. Instead, its smoothed 
 share over a longer period is used, allowing countries to be compared later.
 
+Unrest counts only events from an article's lead paragraph (GDELT's 
+IsRootEvent), in both the numerator and the denominator, so the filter does not
+change the share merely by how much of a country's coverage is lead-paragraph
+material. Setting `Settings.unrest_root_only` = `False` uses all events.
+
 Unrest can use severity weights between 0 and 1. The weighted event count is 
 used for the score, while the sum of squared weights is used when estimating 
 uncertainty. With no weighting, this is equivalent to ordinary event counting.
@@ -110,6 +115,10 @@ class InsufficientHistory(ValueError):
 def load_tiers(path: Path = TIERS_PATH) -> pd.DataFrame:
     """
     The unrest severity tiers: code_prefix, tier, label, reason.
+
+    The values in unrest_tiers.csv:
+        Tier 3: assault (18) and fight (19)
+        Tier 2: riot (145) with coerce (17)
     """
     tiers = pd.read_csv(path, dtype={"code_prefix": "string"})
     if tiers["code_prefix"].duplicated().any():
@@ -121,24 +130,27 @@ def load_tiers(path: Path = TIERS_PATH) -> pd.DataFrame:
 
 def tier_weights(codes: pd.Series, tiers: pd.DataFrame) -> pd.Series:
     """
-    Weight for each event code: tier / top tier, using the longest
-    matching code prefix (so 145 beats 14). A code with no tier stops the
-    run, so a code added to the unrest set cannot silently weigh 0.
+    Weight for each event code: tier / top tier, using the longest matching
+    code prefix (so 145 beats 14). A code with no tier stops the run, so a code
+    added to the unrest set cannot silently weigh 0.
     """
     top = tiers["tier"].max()
     weights = pd.Series(np.nan, index=codes.index)
     best = pd.Series(0, index=codes.index)
+
     for row in tiers.itertuples():
         prefix = str(row.code_prefix)
         match = codes.str.startswith(prefix) & (len(prefix) > best)
         weights[match] = row.tier / top
         best[match] = len(prefix)
+
     if weights.isna().any():
         missing = sorted(codes[weights.isna()].unique())
         raise ValueError(
             f"unrest codes with no severity tier: {missing}. Add them to "
             f"{TIERS_PATH.name}."
         )
+    
     return weights
 
 
@@ -158,15 +170,25 @@ def build_counts(
         tiers: pd.DataFrame | None = None,
     ) -> pd.DataFrame:
     """
-    Numerator k, its sum of squared weights k2, and denominator n per
-    country, day and criterion, for the variant chosen in settings
-    (unrest code set, weighting and denominator).
+    Numerator k, its sum of squared weights k2, and denominator n per country,
+    day and criterion, for the variant chosen in settings (unrest code set,
+    weighting and denominator).
     """
     keys = ["iso3", "date"]
     pieces: list[pd.DataFrame] = []
 
 
     # --- unrest (from the event code table) ---
+
+    # Lead-paragraph events only (both sides of the share), by default
+    if settings.unrest_root_only:
+        if "is_root" not in event_codes.columns:
+            raise ValueError(
+                "the event code table has no is_root column: it was built "
+                "by older code. Delete the database file and run "
+                "src.pull_day again to rebuild it from the cache."
+            )
+        event_codes = event_codes[event_codes["is_root"] == 1]
 
     # Obtain event codes
     codes = (UNREST_ROOT_CODES if settings.unrest_codes == "strict"
@@ -197,7 +219,8 @@ def build_counts(
         # Same actor-coding filter on both sides
         n = event_codes[domestic].groupby(keys)["n_events"].sum()
     else:
-        n = country_day.set_index(keys)["n_events"]
+        # All located events
+        n = event_codes.groupby(keys)["n_events"].sum()
 
     unrest = k.join(n.rename("n"), how="outer").fillna(0)
     pieces.append(unrest.reset_index().assign(criterion="unrest"))
@@ -228,6 +251,7 @@ def build_counts(
             "numerator larger than denominator:\n"
             f"{bad.head().to_string(index=False)}"
         )
+    
     return counts[["iso3", "date", "criterion", "k", "k2", "n"]]
 
 
@@ -239,8 +263,8 @@ def load_fast_inputs(
     ) -> FastInputs:
     """
     Read the days needed for one assessment date, once. With first_date,
-    read enough for every assessment date from first_date to
-    assessment_date (used to compute bounds over a reference period).
+    read enough for every assessment date from first_date to assessment_date
+    (used to compute bounds over a reference period).
     """
     window = max(settings.baseline_days, settings.media_window_days)
     start = (first_date or assessment_date) - timedelta(days=window)
@@ -251,6 +275,7 @@ def load_fast_inputs(
     complete = sorted(
         pd.to_datetime(log.loc[log["complete"] == 1, "date"]).dt.date
     )
+
     return FastInputs(
         counts=build_counts(country_day, event_codes, settings),
         complete_days=complete,
@@ -275,6 +300,7 @@ def _window_days(
         what: str,
     ) -> list[date]:
     days = [d for d in complete if first <= d <= last]
+
     if len(days) < settings.min_baseline_coverage * needed:
         raise InsufficientHistory(
             f"{what}: {len(days)} complete days between {first} and "
@@ -282,6 +308,7 @@ def _window_days(
             f"{int(np.ceil(settings.min_baseline_coverage * needed))} "
             f"of {needed}. Pull the missing days with src.pull_day."
         )
+    
     return days
 
 
@@ -300,18 +327,19 @@ def fast_criteria(
         settings: Settings,
     ) -> pd.DataFrame:
     """
-    One row per country and criterion for the assessment date, with
-    columns value, se (standard error), method ("deviation" or "share"),
-    the counts behind it, and a low_data flag.
+    One row per country and criterion for the assessment date, with columns
+    value, se (standard error), method ("deviation" or "share"), the counts
+    behind it, and a low_data flag.
 
-    Only the criteria chosen in settings.criteria are computed (all four
-    by default). Never returns a missing or infinite value: it raises
-    instead, so nothing undefined reaches normalisation.
+    Only the criteria chosen in settings.criteria are computed (all four by 
+    default). Never returns a missing or infinite value: it raises instead, so
+    nothing undefined reaches normalisation.
     """
     settings.validate()
     chosen = selected_fast_criteria(settings)
     if not chosen:
         return pd.DataFrame(columns=OUTPUT_COLUMNS)
+    
     if assessment_date not in inputs.complete_days:
         raise InsufficientHistory(
             f"{assessment_date} has not been pulled completely"
@@ -333,6 +361,7 @@ def fast_criteria(
     counts = inputs.counts
     if "k2" not in counts.columns: # unweighted counts
         counts = counts.assign(k2=counts["k"])
+
     a = settings.prior_strength
     rows: list[pd.DataFrame] = []
     sums = ["k", "k2", "n"]
@@ -355,11 +384,13 @@ def fast_criteria(
                 f"{criterion}: no qualifying events in any country over "
                 "the window, so it cannot be computed"
             )
+        
         prior = window["k"].sum() / total_n
 
         frame = window.rename(columns={
             "k": "k_window", "k2": "k2_window", "n": "n_window",
         })
+
         frame = frame.join(
             today.rename(columns={
                 "k": "k_today", "k2": "k2_today", "n": "n_today",
@@ -372,6 +403,7 @@ def fast_criteria(
                 frame["k_window"], frame["n_window"], prior, a
             )
             method = "share"
+
         else:
             c = settings.pseudo_events
             p_b, se_b = _smoothed(frame["k_window"], frame["n_window"],
@@ -409,10 +441,13 @@ def fast_criteria(
         result[column] = result[column].astype("int64")
     result = result[OUTPUT_COLUMNS]
 
-    undefined = ~np.isfinite(result[["value", "se"]]).all(axis=1)
+    valid_values = np.isfinite(result[["value", "se"]]).all(axis=1)
+    undefined = ~valid_values
+
     if undefined.any():
         raise ValueError(
-            "undefined values would reach normalisation:\n"
+            "Missing or invalid values found before normalisation:\n"
             f"{result[undefined].head().to_string(index=False)}"
         )
+    
     return result.sort_values(["criterion", "iso3"], ignore_index=True)

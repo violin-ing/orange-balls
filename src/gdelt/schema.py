@@ -112,6 +112,7 @@ USED_COLUMNS: tuple[str, ...] = (
     "Actor2Type1Code",
     "Actor2Type2Code",
     "Actor2Type3Code",
+    "IsRootEvent",
     "DATEADDED",
     "SOURCEURL",
 )

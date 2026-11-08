@@ -3,16 +3,26 @@ Every method choice in scoring in one object.
 
 Each function in src/score/ takes a Settings.
 
-Sensitivity analysis means building many Settings and scoring with each,
-so anything that is not here cannot be varied.
+Sensitivity analysis means building many Settings and scoring with each, so
+anything that is not here cannot be varied.
 
 Settings.validate() refuses combinations that cannot work. Therefore, a bad
 combination will fail at the start of a run.
+
+The defaults: 
+      prior_strength 20,
+      pseudo_events 1
+      media_window_days 30
+      low_data_events 50
+      min-max floor of 0.1
+      
+The method is the weighted arithmetic mean; geometric aggregation is a reported
+variant and is made with geometric_variant().
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 NORMALISATIONS = ("minmax", "zscore")
 AGGREGATIONS = ("arithmetic", "geometric")
@@ -21,6 +31,9 @@ DENOMINATORS = ("domestic", "all")
 MEDIA_METHODS = ("cross_country", "deviation")
 UNREST_WEIGHTINGS = ("tiers", "count", "goldstein")
 BOUNDS = ("fixed", "per_run")
+
+# Bottom of the min-max range when geometric aggregation is used
+GEOMETRIC_FLOOR = 0.1
 
 
 class InvalidSettings(ValueError):
@@ -47,7 +60,7 @@ class Settings:
 
     # Unrest:
     # > "strict" = root codes 14, 18, 19, 20
-    # > "loose" = root code 17
+    # > "loose" = strict plus root code 17
     unrest_codes: str = "strict"
 
     # How unrest events are weighted:
@@ -60,6 +73,11 @@ class Settings:
     # > "domestic" = only domestic-coded events
     # > "all" = all located events (sensitivity variant)
     unrest_denominator: str = "domestic"
+
+    # Unrest uses only events from an article's lead paragraph
+    # (GDELT's IsRootEvent), on both sides of the share. A standard noise
+    # filter; decision log 11.10. False = all events (sensitivity variant).
+    unrest_root_only: bool = True
 
     # Note: Pressure on media is mostly zeros -> by default it is NOT compared
     # with the country's own baseline (its share over a longer window is
@@ -95,7 +113,17 @@ class Settings:
 
     # Score only countries that have every criterion
     require_all_criteria: bool = True
+
+
+    # --- Bands (src/score/bands.py) ---
+
+    # Number of internal bands...
+    # Band 1 = lowest scores (i.e. the most difficult conditions, like DEFCON)
     bands: int = 5
+
+    # Band cuts to control how continuous numerical scores are converted into
+    # categories (empty = equal width categories)
+    band_cuts: tuple[float, ...] = ()
 
 
     # --- Reference data ---
@@ -156,6 +184,13 @@ class Settings:
               "weights must all be positive")
         
         check(self.bands >= 2, "bands must be at least 2")
+        if self.band_cuts:
+            check(len(self.band_cuts) == self.bands - 1,
+                  "band_cuts needs one fewer value than bands")
+            pairs = zip(self.band_cuts[:-1], self.band_cuts[1:],
+                        strict=True)
+            check(all(a < b for a, b in pairs),
+                  "band_cuts must increase")
 
         check(self.reference_lag_years >= 0,
               "reference_lag_years cannot be negative")
@@ -173,3 +208,12 @@ class Settings:
         if problems:
             raise InvalidSettings("; ".join(problems))
         return self
+
+
+def geometric_variant(settings: Settings) -> Settings:
+    """
+    The same settings with geometric aggregation and the ratified min-max
+    floor of 0.1 (for reporting geometric aggregation as a variant).
+    """
+    return replace(settings, aggregation="geometric",
+                   normalisation="minmax", minmax_floor=GEOMETRIC_FLOOR)

@@ -8,8 +8,8 @@ The module produces two output tables:
     - to_country_day(): one row per country per day, containing event
       totals and the measurements needed by the scoring criteria.
     - to_event_code_day(): one row per country, day, event code,
-      relationship and media-target status, preserving the full CAMEO
-      event code detail.
+      relationship, media-target status and lead-paragraph status,
+      preserving the full CAMEO event code detail.
 
 This module only counts events and adds up measurements. It does not
 calculate percentages, weights, scores or overall levels. Those
@@ -34,6 +34,10 @@ Important details:
     - Each criterion stores event counts, article counts and Goldstein
       totals. The scoring module decides which measure to use.
     - SOURCEURL is not included in the output.
+    - IsRootEvent (1 = the event was taken from an article's lead
+      paragraph) is kept as the is_root column of the event-code table,
+      so scoring can use lead-paragraph events only (a standard GDELT
+      noise filter). The country-day table counts all events.
 """
 
 from __future__ import annotations
@@ -73,6 +77,7 @@ REQUIRED_COLUMNS: tuple[str, ...] = (
     "NumMentions",
     "NumArticles",
     "AvgTone",
+    "IsRootEvent",
 )
 
 ROOT_CODES: list[str] = sorted(CAMEO_ROOT_LABELS) # "01" to "20"
@@ -81,7 +86,7 @@ QUAD_CLASSES: list[int] = sorted(QUAD_CLASS_LABELS) # 1 to 4
 
 # === EVENT SELECTION RULES ===
 
-# Domestic unrest codes
+# Domestic unrest codes...
 # Strict definition: protest, assault, fighting and mass violence
 UNREST_ROOT_CODES: frozenset[str] = frozenset({"14", "18", "19", "20"})
 
@@ -89,7 +94,7 @@ UNREST_ROOT_CODES: frozenset[str] = frozenset({"14", "18", "19", "20"})
 UNREST_LOOSE_ROOT_CODES: frozenset[str] = UNREST_ROOT_CODES | {"17"}
 
 
-# Pressure on media codes
+# Pressure on media codes...
 # Includes disapproval, rejection, threats, coercion and assault
 MEDIA_PRESSURE_ROOT_CODES: frozenset[str] = frozenset(
     {"11", "12", "13", "17", "18"}
@@ -128,7 +133,7 @@ COUNT_KINDS: tuple[str, ...] = ("events", "articles", "goldstein")
 
 # Columns in the detailed event-code output table.
 EVENT_CODE_COLUMNS: list[str] = [
-    "iso3", "date", "event_code", "relation", "media_target",
+    "iso3", "date", "event_code", "relation", "media_target", "is_root",
     "n_events", "n_articles", "goldstein_sum",
 ]
 
@@ -234,6 +239,11 @@ def _prepare(events: pd.DataFrame) -> _Prepared:
     # The target (actor 2) is coded as media in any of its type slots
     work["media_target"] = _has_type(work, "2", MEDIA_TYPE_CODE)
 
+    # Taken from an article's lead paragraph (IsRootEvent = 1)
+    # Anything else (e.g. missing value) counts as not
+    is_root = pd.to_numeric(work["IsRootEvent"], errors="coerce") == 1
+    work["is_root"] = is_root.fillna(False).astype(bool)
+
     # Missing Goldstein values add nothing to a sum
     work["_goldstein"] = work["GoldsteinScale"].fillna(0.0)
 
@@ -258,8 +268,10 @@ def _criterion_sums(
     their Goldstein values, grouped by the key columns.
 
     A flag is a True/False column saying whether each event counts.
-    Gives three columns per flag: <name>_events, <name>_articles and
-    <name>_goldstein.
+    Gives three columns per flag: 
+        <name>_events 
+        <name>_articles
+        <name>_goldstein
     """
     work = frame[keys].copy()
     for name, flag in flags.items():
@@ -306,7 +318,7 @@ def to_country_day(events: pd.DataFrame) -> pd.DataFrame:
     located = work[work["iso3"].notna()].copy()
     keys = ["iso3", "date"]
 
-    # Calculate daily event totals and averages.
+    # Calculate daily event totals and averages
     table = located.groupby(keys).agg(
         n_events=("GlobalEventID", "size"),
         n_mentions=("NumMentions", "sum"),
@@ -315,16 +327,15 @@ def to_country_day(events: pd.DataFrame) -> pd.DataFrame:
         goldstein_mean=("GoldsteinScale", "mean"),
     )
 
-    # Calculate average tone weighted by article counts.
-    # Events without a tone value receive no weight.
+    # Calculate average tone weighted by article counts (events without a tone
+    # value receive no weight)
     weight = located["NumArticles"].where(located["AvgTone"].notna(), 0)
     located["_tone_x_weight"] = located["AvgTone"] * weight
     located["_weight"] = weight
     sums = located.groupby(keys)[["_tone_x_weight", "_weight"]].sum()
     table["tone_mean_weighted"] = sums["_tone_x_weight"] / sums["_weight"]
 
-    # Count events by QuadClass and CAMEO root code.
-    # Include all possible codes, even when their count is zero.
+    # Count events by QuadClass and CAMEO root code
     index = [located["iso3"], located["date"]]
 
     quad_counts = pd.crosstab(index, located["QuadClass"])
@@ -335,20 +346,20 @@ def to_country_day(events: pd.DataFrame) -> pd.DataFrame:
     root_counts = root_counts.reindex(columns=ROOT_CODES, fill_value=0)
     root_counts.columns = [f"root_{code}" for code in ROOT_CODES]
 
-    # Keep all country-days, including those with missing event codes.
+    # Keep all country-days, including those with missing event codes
     quad_counts = quad_counts.reindex(table.index, fill_value=0)
     root_counts = root_counts.reindex(table.index, fill_value=0)
     table = table.join(quad_counts).join(root_counts)
 
-    # Count events with missing or unrecognised root codes.
+    # Count events with missing or unrecognised root codes
     table["root_other"] = table["n_events"] - root_counts.sum(axis=1)
 
-    # Exclude media-targeted events from unrest to avoid double counting.
+    # Exclude media-targeted events from unrest to avoid double counting
     domestic_not_media = (
         (work["relation"] == RELATION_DOMESTIC) & ~target_is_media
     )
 
-    # Calculate unrest and media-pressure measures.
+    # Calculate unrest and media-pressure measures
     location_sums = _criterion_sums(
         located,
         keys,
@@ -367,8 +378,8 @@ def to_country_day(events: pd.DataFrame) -> pd.DataFrame:
 
     # --- Events involving each country ---
 
-    # Create one record for each country involved in an event.
-    # If both actors are the same country, keep only one record.
+    # Create one record for each country involved in an event (only count once
+    # if both actors are the same country)
     different = (work["actor1"] != work["actor2"]).fillna(False)
     both_countries = work["actor1"].notna() & work["actor2"].notna()
 
@@ -389,7 +400,7 @@ def to_country_day(events: pd.DataFrame) -> pd.DataFrame:
         subset=["GlobalEventID", "iso3"], ignore_index=True
     )
 
-    # Count international conflict and cooperation events.
+    # Count international conflict and cooperation events
     is_cross_border = taking_part["international"].astype(bool)
     part_quad = taking_part["QuadClass"]
     actor_sums = _criterion_sums(
@@ -409,10 +420,10 @@ def to_country_day(events: pd.DataFrame) -> pd.DataFrame:
 
     # --- Combine location and actor measures ---
 
-    # Keep countries that appear in either set of measures.
+    # Keep countries that appear in either set of measures
     table = table.join(actor_sums, how="outer")
 
-    # Replace missing counts and sums with zero.
+    # Replace missing counts and sums with zero
     int_columns = (
         ["n_events", "n_mentions", "n_articles"]
         + list(quad_counts.columns)
@@ -428,7 +439,7 @@ def to_country_day(events: pd.DataFrame) -> pd.DataFrame:
     table[int_columns] = table[int_columns].fillna(0).astype("int64")
     table[goldstein_columns] = table[goldstein_columns].fillna(0.0)
 
-    # Arrange columns and sort by date and country.
+    # Arrange columns and sort by date and country
     column_order = (
         ["n_events", "n_mentions", "n_articles",
          "tone_mean", "tone_mean_weighted", "goldstein_mean"]
@@ -441,7 +452,7 @@ def to_country_day(events: pd.DataFrame) -> pd.DataFrame:
     table = table[column_order].reset_index()
     table = table.sort_values(["date", "iso3"], ignore_index=True)
 
-    # Attach information about excluded rows and unmatched actor codes.
+    # Attach info about excluded rows and unmatched actor codes
     table.attrs["dropped"] = prepared.dropped
     table.attrs["actor_codes_unmatched"] = prepared.unmatched
 
@@ -452,8 +463,9 @@ def to_event_code_day(events: pd.DataFrame) -> pd.DataFrame:
     """
     Summarise located events by full CAMEO event code.
 
-    One row per country, day, event code, actor relationship and
-    media-target status.
+    One row per country, day, event code, actor relationship,
+    media-target status and lead-paragraph status (is_root: 1 when
+    GDELT took the event from an article's lead paragraph).
 
     Columns:
         n_events       number of events
@@ -479,9 +491,13 @@ def to_event_code_day(events: pd.DataFrame) -> pd.DataFrame:
     # Standardise event codes and media-target flags
     located["event_code"] = located["EventCode"].fillna("").astype(str)
     located["media_target"] = located["media_target"].astype("int64")
+    located["is_root"] = located["is_root"].astype("int64")
 
-    # Group by country, day, event code and actor relationship
-    keys = ["iso3", "date", "event_code", "relation", "media_target"]
+    # Group by country, day, event code, actor relationship and flags
+    keys = [
+        "iso3", "date", "event_code", "relation", "media_target",
+        "is_root",
+    ]
     table = located.groupby(keys).agg(
         n_events=("GlobalEventID", "size"),
         n_articles=("NumArticles", "sum"),

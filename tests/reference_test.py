@@ -41,11 +41,13 @@ def temp_dir() -> Path:
     return Path(tempfile.mkdtemp())
 
 
-# ---------------------------------------------------------------- WGI
+# === WGI ===
 
 def wgi_sheet(rows: list[tuple]) -> pd.DataFrame:
-    """rows: (code, name, year, score 0-100, its standard error). The
-    -2.5 to +2.5 estimate columns are present but must not be read."""
+    """
+    rows: (code, name, year, score 0-100, its standard error). The
+    -2.5 to +2.5 estimate columns are present but must not be read.
+    """
     return pd.DataFrame({
         "ID variable (economy code/ gov. dimension/ year)": "x",
         NAME: [r[1] for r in rows],
@@ -67,22 +69,27 @@ def make_wgi(path: Path, extra_row: tuple | None = None) -> Path:
         ("GBR", "United Kingdom", 1998, 80.0, 4.0),  # before min_year
         ("NGA", "Nigeria", 2020, "..", ".."),       # missing value
     ]
+
     if extra_row:
         ge.append(extra_row)
+
     pv = [
         ("GBR", "United Kingdom", 2020, 70.0, 5.0),
         ("NGA", "Nigeria", 2020, 20.0, 6.0),
     ]
+
     with pd.ExcelWriter(path) as writer:
         wgi_sheet(ge).to_excel(writer, sheet_name="ge", index=False)
         wgi_sheet(pv).to_excel(writer, sheet_name="pv", index=False)
         wgi_sheet(pv).to_excel(writer, sheet_name="va", index=False)
+
     return path
 
 
 def test_wgi_loads_the_right_rows() -> None:
     table = load_wgi(make_wgi(temp_dir() / "wgi.xlsx"))
     assert list(table.columns) == REFERENCE_COLUMNS
+
     found = [(r.variable, r.iso3, r.year, r.value) for r in table.itertuples()]
     assert found == [
         ("wgi_ge", "GBR", 2020, 84.0),
@@ -90,6 +97,7 @@ def test_wgi_loads_the_right_rows() -> None:
         ("wgi_pv", "GBR", 2020, 70.0),
         ("wgi_pv", "NGA", 2020, 20.0),
     ], found
+
     gbr = table[(table["iso3"] == "GBR") & (table["variable"] == "wgi_ge")]
     assert gbr["sd"].item() == 4.0 and gbr["interval"].item() == 0.90
     assert abs(gbr["low"].item() - (84.0 - Z_90 * 4.0)) < 1e-9
@@ -97,8 +105,11 @@ def test_wgi_loads_the_right_rows() -> None:
 
 
 def test_wgi_unknown_code_stops_the_load() -> None:
-    path = make_wgi(temp_dir() / "wgi.xlsx",
-                    extra_row=("ZZZ", "Nowhere", 2020, 50.0, 5.0))
+    path = make_wgi(
+        temp_dir() / "wgi.xlsx",
+        extra_row=("ZZZ", "Nowhere", 2020, 50.0, 5.0)
+    )
+    
     try:
         load_wgi(path)
     except UnknownReferenceCode as error:
@@ -107,10 +118,10 @@ def test_wgi_unknown_code_stops_the_load() -> None:
         raise AssertionError("an unknown code should raise")
 
 
-# -------------------------------------------------------------- V-Dem
+# === V-Dem ===
 
 VDEM_VARS = ["v2mecenefm", "v2meharjrn", "v2smgovshutcap",
-             "v2smgovdom", "v2smpardom", "v2smpolsoc"]
+             "v2smgovdom", "v2smpardom"]
 
 
 def make_vdem(path: Path, extra_code: str | None = None) -> Path:
@@ -118,17 +129,20 @@ def make_vdem(path: Path, extra_code: str | None = None) -> Path:
         # code, name, year, value for each variable
         ("GBR", "United Kingdom", 2020, 2.5),
         ("NAM", "Namibia", 2020, 1.0),
-        ("BAD", "Baden", 1850, 0.0),        # historical, before min_year
-        ("NGA", "Nigeria", 2020, "NA"),     # missing value
+        ("BAD", "Baden", 1850, 0.0), # historical, before min_year
+        ("NGA", "Nigeria", 2020, "NA"), # missing value
     ]
+
     if extra_code:
         rows.append((extra_code, "Somewhere", 2020, 0.3))
+
     frame = pd.DataFrame({
         "country_name": [r[1] for r in rows],
         "country_text_id": [r[0] for r in rows],
         "year": [r[2] for r in rows],
-        "v2x_polyarchy": 0.5,                # a column not read
+        "v2x_polyarchy": 0.5, # a column not read
     })
+
     for var in VDEM_VARS:
         frame[var] = [r[3] for r in rows]
         frame[f"{var}_sd"] = 0.1
@@ -138,8 +152,10 @@ def make_vdem(path: Path, extra_code: str | None = None) -> Path:
         frame[f"{var}_codehigh"] = [
             r[3] if r[3] == "NA" else r[3] + 0.2 for r in rows
         ]
-        frame[f"{var}_osp"] = 9.9             # a version not read
+        frame[f"{var}_osp"] = 9.9 # a version not read
+
     frame.to_csv(path, index=False)
+
     return path
 
 
@@ -151,39 +167,44 @@ def test_vdem_loads_the_right_rows() -> None:
     gbr = table[(table["iso3"] == "GBR") & (table["variable"] == "v2meharjrn")]
     assert gbr["value"].item() == 2.5 and gbr["sd"].item() == 0.1
     assert abs(gbr["low"].item() - 2.3) < 1e-9
-    assert gbr["interval"].isna().all()       # not recorded for V-Dem
+    assert gbr["interval"].isna().all() # not recorded for V-Dem
 
 
 def test_vdem_unknown_code_stops_the_load() -> None:
     path = make_vdem(temp_dir() / "vdem.csv", extra_code="XYZ")
+
     try:
         load_vdem(path)
     except UnknownReferenceCode as error:
         assert "XYZ (Somewhere)" in str(error), str(error)
     else:
-        raise AssertionError("an unknown code should raise")
+        raise AssertionError("An unknown code should raise")
 
 
 def test_vdem_missing_column_is_reported() -> None:
     path = make_vdem(temp_dir() / "vdem.csv")
+
     frame = pd.read_csv(path).drop(columns="v2meharjrn_sd")
     frame.to_csv(path, index=False)
+
     try:
         load_vdem(path)
     except ValueError as error:
         assert "v2meharjrn_sd" in str(error)
     else:
-        raise AssertionError("a missing column should raise")
+        raise AssertionError("A missing column should raise")
 
 
-# === WORLD BANK ===
+# === World Bank ===
 
 def make_worldbank(folder: Path) -> Path:
     name = "API_NY.GDP.PCAP.PP.KD_DS2_en_csv_v2_1.csv"
+
     header = (
         '"Data Source","World Development Indicators",\n\n'
         '"Last Updated Date","2026-10-01",\n\n'
     )
+
     values = pd.DataFrame({
         "Country Name": ["United Kingdom", "World", "Namibia",
                          "Channel Islands"],
@@ -195,6 +216,7 @@ def make_worldbank(folder: Path) -> Path:
         "2021": [46000.0, 18000.0, 9000.0, 56000.0],
     })
     values["Unnamed"] = "" # download ends each line with a comma
+
     path = folder / name
     path.write_text(header + values.to_csv(index=False), encoding="utf-8")
     pd.DataFrame({
@@ -224,7 +246,7 @@ def test_worldbank_drops_totals_and_old_years() -> None:
     assert table["sd"].isna().all()
 
 
-# === VARIABLES ===
+# === Variables ===
 
 def test_directions_match_the_codebooks() -> None:
     """From the V-Dem v16 codebook answer scales; see variables.py."""
@@ -232,22 +254,23 @@ def test_directions_match_the_codebooks() -> None:
     assert better_when_high == {
         "wgi_ge": True,
         "wgi_pv": True,
-        "v2mecenefm": True,       # 4 = government rarely censors
-        "v2meharjrn": True,       # 4 = journalists never harassed
-        "v2smgovshutcap": False,  # 4 = can shut down all Internet access
-        "v2smgovdom": True,       # 4 = government never spreads false info
-        "v2smpardom": True,       # 4 = parties never spread false info
-        "v2smpolsoc": True,       # 4 = no polarization
-        "gdp_pc": True,           # not scored; validation only
+        "v2mecenefm": True, # 4 = government rarely censors
+        "v2meharjrn": True, # 4 = journalists never harassed
+        "v2smgovshutcap": False, # 4 = can shut down all Internet access
+        "v2smgovdom": True, # 4 = government never spreads false info
+        "v2smpardom": True, # 4 = parties never spread false info
+        "gdp_pc": True, # not scored; validation only
     }
     roles = {n: v.role for n, v in VARIABLES.items()}
     assert [n for n, r in roles.items() if r == "criterion"] == [
         "wgi_ge", "wgi_pv", "v2mecenefm", "v2meharjrn", "v2smgovshutcap",
+        "v2smgovdom",
     ]
+    assert roles["v2smpardom"] == "candidate"
     assert roles["gdp_pc"] == "validation"
 
 
-# === SELECTING AND JOINING ===
+# === Selecting & Joining ===
 
 def make_reference() -> pd.DataFrame:
     folder = temp_dir()
@@ -263,10 +286,11 @@ def test_for_year_is_exact_and_has_a_fixed_shape() -> None:
     expected = ["iso3"]
     for name in VARIABLES:
         expected += [name, f"{name}_sd"]
+
     assert list(wide.columns) == expected
     assert wide["iso3"].tolist() == ["GBR", "NAM", "NGA"]
 
-    # A year with no data gives no rows, never another year's values
+    # A year with no data gives no rows
     assert len(for_year(make_reference(), 2019)) == 0
 
 
@@ -282,12 +306,12 @@ def test_join_keeps_every_country_day() -> None:
 
     coverage = joined.attrs["reference_coverage"]
     assert coverage["reference_year"] == 2020
-    assert coverage["with_all_variables"] == 1     # GBR only
-    assert coverage["with_no_variables"] == 1      # GUM
+    assert coverage["with_all_variables"] == 1 # GBR only
+    assert coverage["with_no_variables"] == 1 # GUM
     assert coverage["events_without_reference"] == 6
 
 
-# === DATABASE ===
+# === Database ===
 
 def test_reference_is_saved_and_replaced_by_source() -> None:
     reference = make_reference()
