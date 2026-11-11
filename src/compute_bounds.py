@@ -99,13 +99,16 @@ def main() -> None:
     connection = connect(DB_PATH)
 
     try:
+        
+        # === 1. Calculate structural indicator bounds ===
+
         reference = load_reference(connection)
 
         if reference.empty:
             raise SystemExit("no reference data: run src.load_reference")
-        
-        # Latest year of the scored structural variables, not of the
-        # validation data (GDP may run a year further)
+
+        # Exclude validation variables when determining the default year range
+        # Validation data such as GDP may extend beyond the scored variables
         scored = reference[~reference["variable"].isin(
             with_role("validation"))]
         first, last = args.slow_years or (
@@ -116,12 +119,15 @@ def main() -> None:
 
         print(slow[["criterion", "method", "lower", "upper"]]
               .round(3).to_string(index=False))
-        
+
         save_bounds(connection, slow)
 
         if args.skip_fast:
             return
-        
+
+
+        # === 2. Identify the complete GDELT reference period ===
+
         log = load_pull_log(connection)
         complete = sorted(
             pd.to_datetime(log.loc[log["complete"] == 1, "date"]).dt.date
@@ -129,36 +135,46 @@ def main() -> None:
 
         if not complete:
             raise SystemExit("no complete GDELT days: run src.pull_day")
-        
+
+        # Restrict the reference period to days with completed pulls
         start = args.fast_from or complete[0]
         end = args.fast_to or complete[-1]
         days = [d for d in complete if start <= d <= end]
 
+        # Load the history needed to calculate scores for the selected days
         inputs = load_fast_inputs(connection, end, settings,
                                   first_date=start)
-        
+
+
+        # === 3. Calculate GDELT indicator bounds ===
+
+        # Calculate country-level scores and exclude days wout enough history
         values, skipped = fast_reference_values(inputs, days, settings)
         fast = fast_bounds(values, settings)
 
         print(f"\nGDELT bounds, settings variant {fast_variant(settings)}, "
               f"{len(days) - len(skipped)} days used, {len(skipped)} "
               "skipped (not enough history before them):")
-        
+
         print(fast[["criterion", "method", "lower", "upper"]]
               .round(4).to_string(index=False))
 
+        # Warn when the percentile limits are based on a small reference sample
         used = len(days) - len(skipped)
         if used < MIN_FAST_REFERENCE_DAYS:
             print(f"\nWARNING: only {used} reference days (fewer than "
                   f"{MIN_FAST_REFERENCE_DAYS}). The percentile caps rest on "
                   "little data; pull more days (about 180 in total) and "
                   "run this again.")
-        
+
+
+        # === 4. Save GDELT indicator bounds ===
+
         save_bounds(connection, fast)
 
     finally:
         connection.close()
-        
+
     print("\nBOUNDS SAVED")
 
 

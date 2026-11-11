@@ -46,6 +46,7 @@ NON_COUNTRY_CODES: frozenset[str] = frozenset(
         "UF",  # Undersea Features
         "UU",  # Undesignated Sovereignty
         "OC",  # Oceans
+        "YI",  # Yugoslavia
     }
 )
 
