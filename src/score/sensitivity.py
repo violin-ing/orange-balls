@@ -41,6 +41,10 @@ Only countries with every criterion are used (the default,
 require_all_criteria). Arithmetic aggregation is the method; with
 geometric_variant() settings the draws use the geometric mean, so the
 geometric variant can be reported the same way.
+
+The cut points are the ones the scoring run used (ScoreResult.cuts): with
+the default settings, the frozen reference-period percentiles. They stay
+fixed across the draws, as they would for anyone using the tool.
 """
 
 from __future__ import annotations
@@ -50,7 +54,7 @@ from dataclasses import dataclass
 import numpy as np
 import pandas as pd
 
-from src.score.bands import band_of, cut_points
+from src.score.bands import band_of
 from src.score.run import ScoreResult
 from src.score.settings import Settings
 
@@ -128,11 +132,11 @@ def weights_monte_carlo(
     with.
     """
     settings.validate()
-    cuts = cut_points(settings)
+    cuts = result.cuts
     if cuts is None:
         raise ValueError(
-            "these settings give no bands (z-scores without band_cuts), "
-            "so band changes cannot be counted"
+            "this run has no bands (z-scores without cut points), so band "
+            "changes cannot be counted"
         )
 
     norm = result.norm.dropna()

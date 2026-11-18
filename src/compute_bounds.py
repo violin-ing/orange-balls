@@ -29,8 +29,19 @@ It calculates limits for two types of indicators:
        The upper limit is set at the 99th percentile to prevent
        unusually high values from stretching the scale too far.
 
-The calculated limits are saved in the database, replacing
-previous limits for the same indicators and settings.
+    3. Band cut points (decision log 14.1 and 14.2)
+
+       Scores every country on every usable reference day with the
+       limits above, then takes the 5th, 20th, 50th and 80th
+       percentiles of all those scores as the cut points between bands
+       1 to 5. Also stores equal fifths (20th, 40th, 60th, 80th) for the
+       comparison run, and the same two sets for the geometric variant.
+       Prints how many countries each split puts in each band on the
+       last reference day.
+
+The calculated limits and cut points are saved in the database, replacing
+previous ones for the same indicators and settings. They are then frozen:
+run this again only on purpose, since new values change every band.
 
 Default periods (the reference periods decided in decision log 11.13):
 
@@ -52,17 +63,20 @@ Options:
         Last date to include for GDELT indicators.
 
     --skip-fast
-        Calculate structural limits only.
+        Calculate structural limits only (no GDELT limits, no cut points).
 """
 
 from __future__ import annotations
 
 import argparse
+import textwrap
+from dataclasses import replace
 from datetime import date
 
 import pandas as pd
 
 from src.reference.variables import with_role
+from src.score.bands import band_of, reference_cut_rows
 from src.score.bounds import (
     fast_bounds,
     fast_reference_values,
@@ -70,17 +84,28 @@ from src.score.bounds import (
     slow_bounds,
 )
 from src.score.fast import load_fast_inputs
-from src.score.settings import Settings
+from src.score.run import ScoreInputs, reference_scores
+from src.score.settings import EQUAL_FIFTHS, Settings, geometric_variant
 from src.store.database import (
     DB_PATH,
     connect,
+    load_bounds,
     load_pull_log,
     load_reference,
+    save_band_cuts,
     save_bounds,
 )
 
 SLOW_REFERENCE_FIRST_YEAR = 2000
 MIN_FAST_REFERENCE_DAYS = 60
+
+
+def show_bounds(bounds: pd.DataFrame, digits: int) -> None:
+    """
+    Print the lower and upper limit of each criterion, indented.
+    """
+    table = bounds[["criterion", "method", "lower", "upper"]].round(digits)
+    print(textwrap.indent(table.to_string(index=False), "   "))
 
 
 def main() -> None:
@@ -95,6 +120,8 @@ def main() -> None:
                         help="structural bounds only")
     args = parser.parse_args()
     settings = Settings().validate()
+
+    print("\n=== Fixed scales and band cut points ===")
 
     connection = connect(DB_PATH)
 
@@ -115,14 +142,14 @@ def main() -> None:
             SLOW_REFERENCE_FIRST_YEAR, int(scored["year"].max()))
         slow = slow_bounds(reference, first, last)
 
-        print(f"structural bounds, years {first} to {last}:")
-
-        print(slow[["criterion", "method", "lower", "upper"]]
-              .round(3).to_string(index=False))
+        print(f"\n1. Structural criteria: limits over the years {first} "
+              f"to {last}")
+        show_bounds(slow, 3)
 
         save_bounds(connection, slow)
 
         if args.skip_fast:
+            print("\nDone: structural limits saved (GDELT skipped).")
             return
 
 
@@ -152,17 +179,17 @@ def main() -> None:
         values, skipped = fast_reference_values(inputs, days, settings)
         fast = fast_bounds(values, settings)
 
-        print(f"\nGDELT bounds, settings variant {fast_variant(settings)}, "
-              f"{len(days) - len(skipped)} days used, {len(skipped)} "
-              "skipped (not enough history before them):")
+        used = len(days) - len(skipped)
 
-        print(fast[["criterion", "method", "lower", "upper"]]
-              .round(4).to_string(index=False))
+        print(f"\n2. GDELT criteria: limits over {used} reference days "
+              f"({days[0]} to {days[-1]})")
+        print(f"   {len(skipped)} days skipped (not enough history before "
+              f"them); settings variant {fast_variant(settings)}")
+        show_bounds(fast, 4)
 
         # Warn when the percentile limits are based on a small reference sample
-        used = len(days) - len(skipped)
         if used < MIN_FAST_REFERENCE_DAYS:
-            print(f"\nWARNING: only {used} reference days (fewer than "
+            print(f"\n   WARNING: only {used} reference days (fewer than "
                   f"{MIN_FAST_REFERENCE_DAYS}). The percentile caps rest on "
                   "little data; pull more days (about 180 in total) and "
                   "run this again.")
@@ -172,10 +199,53 @@ def main() -> None:
 
         save_bounds(connection, fast)
 
+
+        # === 5. Band cut points from reference-period scores ===
+
+        # Everything scoring needs for the whole period, loaded once
+        score_inputs = ScoreInputs(
+            fast=inputs,
+            reference=reference,
+            bounds=load_bounds(connection),
+        )
+
+        print("\n3. Band cut points (from every country's score on every "
+              "reference day)")
+
+        for label, base in (("arithmetic mean (the method)", settings),
+                            ("geometric mean (variant)",
+                             geometric_variant(settings))):
+            scores, _ = reference_scores(score_inputs, days, base)
+            last_day = scores[scores["date"] == scores["date"].max()]
+
+            print(f"\n   {label}: {scores['date'].nunique()} days, "
+                  f"{len(scores):,} country-day scores")
+
+            for name, split in (("decided split", base.band_percentiles),
+                                ("equal fifths", EQUAL_FIFTHS)):
+                rows = reference_cut_rows(
+                    scores, replace(base, band_percentiles=split))
+                save_band_cuts(connection, rows)
+
+                cuts = rows["value"].to_numpy()
+                counts = pd.Series(band_of(last_day["score"], cuts)) \
+                    .value_counts().reindex(range(1, len(cuts) + 2),
+                                            fill_value=0)
+
+                percentiles = "/".join(str(int(p)) for p in split)
+                print(f"     {name} (percentiles {percentiles})")
+                print("       cut points       "
+                      + "  ".join(f"{float(c):.3f}" for c in cuts))
+                print(f"       countries per band on "
+                      f"{last_day['date'].max()}: "
+                      + " | ".join(f"band {b}: {n}"
+                                   for b, n in counts.items()))
+
     finally:
         connection.close()
 
-    print("\nBOUNDS SAVED")
+    print("\nDone: limits and cut points saved. They stay fixed until "
+          "this is run again on purpose.")
 
 
 if __name__ == "__main__":

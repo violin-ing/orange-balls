@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import textwrap
 from pathlib import Path
 
 import pandas as pd
@@ -101,17 +102,17 @@ def check_recorded(path: Path, checksum: str) -> None:
     """
 
     if not VERSIONS.exists():
-        print(f"  WARNING: {VERSIONS} not found, cannot check the version")
+        print(f"     WARNING: {VERSIONS} not found, cannot check the version")
         return
 
     # Check whether the calculated checksum appears in the version record
     if checksum not in VERSIONS.read_text(encoding="utf-8"):
         print(
-            f"  WARNING: {path.name}'s checksum is not in {VERSIONS}. "
+            f"     WARNING: this checksum is not in {VERSIONS}. "
             "Record it there before using results from this file."
         )
     else:
-        print(f"  checksum matches {VERSIONS}")
+        print(f"     checksum matches {VERSIONS}")
 
 
 # === 4. Calculate reference-data coverage by year ===
@@ -169,10 +170,13 @@ def main() -> None:
     # World Bank data is optional, so continue if no file is available
     wb = args.wb or next(iter(sorted(WB_DIR.glob("API_*.csv"))), None)
 
+    print("\n=== Load structural reference data ===")
+
     if wb is not None:
         files["wb"] = wb
     else:
-        print(f"no World Bank file in {WB_DIR}; GDP per capita not loaded")
+        print(f"\n(no World Bank file in {WB_DIR}; GDP per capita not "
+              "loaded)")
 
     # Match each reference source to its corresponding loading function
     loaders = {
@@ -186,12 +190,15 @@ def main() -> None:
     # Store the processed tables separately by data source
     tables: dict[str, pd.DataFrame] = {}
 
+    print("\n1. Read and check each file")
+
     for source, path in files.items():
-        print(f"{source}: {path}")
+        print(f"   {source:<5}{path.name}")
 
         # Calculate a checksum to identify the exact input file version
+        # (only the start is printed; the full value goes in the database)
         checksum = sha256(path)
-        print(f"  sha256 {checksum}")
+        print(f"     sha256 {checksum[:16]}...")
 
         # Check whether the input file version is documented
         check_recorded(path, checksum)
@@ -207,13 +214,16 @@ def main() -> None:
         # Attach the checksum to the table so it can be recorded in the DB
         tables[source].attrs["sha256"] = checksum
 
-        print(f"  {len(tables[source]):,} rows read")
+        print(f"     {len(tables[source]):,} rows read")
 
     # === 5.3 Save reference data to the database ===
 
     connection = connect(DB_PATH)
 
     try:
+        print(f"\n2. Save to {DB_PATH} (replacing the old rows of each "
+              "source)")
+
         for source, table in tables.items():
 
             # Replace the existing records for this source and save the
@@ -226,7 +236,7 @@ def main() -> None:
                 table.attrs["sha256"],
             )
 
-            print(f"saved {written:,} {source} rows to {DB_PATH}")
+            print(f"   {source:<5}{written:,} rows saved")
 
         # Combine all reference sources into one table for the coverage report
         reference = pd.concat(tables.values(), ignore_index=True)
@@ -235,14 +245,18 @@ def main() -> None:
 
         # Show the number of countries with data for each variable across the
         # years 2019 to 2025
-        print("\n--- countries with a value, 2019 to 2025 ---")
-        print(coverage_by_year(reference, range(2019, 2026)).to_string())
+        print("\n3. Countries with a value, 2019 to 2025")
+        print(textwrap.indent(
+            coverage_by_year(reference, range(2019, 2026)).to_string(),
+            "   ",
+        ))
 
         # Retrieve the GDELT pull log to identify the latest available date
         log = load_pull_log(connection)
 
         if log.empty:
-            print("\nno GDELT days stored yet, so no join report")
+            print("\n4. No GDELT days stored yet, so no match with GDELT")
+            print("\nDone: reference data loaded.")
             return
 
         # Select the latest date with GDELT data available
@@ -267,25 +281,22 @@ def main() -> None:
     # Retrieve statistics describing how much reference data is available
     coverage = joined.attrs["reference_coverage"]
 
-    print(
-        f"\n--- join: GDELT {last_day} with reference year "
-        f"{args.year} ---"
-    )
-    print(coverage)
+    print(f"\n4. Match with GDELT ({last_day}, reference year "
+          f"{args.year})")
+    print(f"   countries in GDELT       {coverage['countries']}")
+    print(f"   with every variable      {coverage['with_all_variables']}")
+    print(f"   with no variables        {coverage['with_no_variables']}")
 
-    # Calculate the proportion of located GDELT events occurring in countries
-    # where some reference data is missing
+    # Proportion of located GDELT events in countries where some
+    # reference data is missing
     share = coverage["events_without_reference"] / max(
         coverage["events_total"], 1
     )
 
-    print(
-        f"located events in countries missing some reference data: "
-        f"{share:.1%}"
-    )
+    print(f"   events in countries missing some data: {share:.1%}")
 
-    # Identify countries missing either WGI government effectiveness or the 
-    # V-Dem executive corruption measure
+    # Countries missing either WGI government effectiveness or the
+    # V-Dem media censorship measure
     missing = joined[
         joined["wgi_ge"].isna() | joined["v2mecenefm"].isna()
     ]
@@ -293,20 +304,23 @@ def main() -> None:
     # Rank countries by event frequency and retain the ten largest
     top = missing.sort_values("n_events", ascending=False).head(10)
 
-    print("\nlargest GDELT countries missing some reference data:")
-    print(
-        top[
-            [
-                "iso3",
-                "n_events",
-                "wgi_ge",
-                "v2mecenefm",
-                "v2smgovshutcap",
-            ]
-        ].to_string(index=False)
-    )
+    if not top.empty:
+        print("\n   largest GDELT countries missing some data:")
+        print(textwrap.indent(
+            top[
+                [
+                    "iso3",
+                    "n_events",
+                    "wgi_ge",
+                    "v2mecenefm",
+                    "v2smgovshutcap",
+                ]
+            ].rename(columns={"iso3": "country", "n_events": "events"})
+            .to_string(index=False),
+            "   ",
+        ))
 
-    print("\nREFERENCE LOAD OK")
+    print("\nDone: reference data loaded.")
 
 
 if __name__ == "__main__":

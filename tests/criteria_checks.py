@@ -54,7 +54,7 @@ CACHE_DIR = Path("data/cache/gdelt")
 MIN_EVENTS = 200 # countries with fewer located events are skipped
 ROOT19_COUNTRIES = ["USA", "GBR", "RUS", "ISR", "IND", "NGA"]
 SAMPLE = 8
-LOW_DATA = 50 # events a day, matches Settings.low_data_events
+LOW_DATA = 50 # events a day; a diagnostic only (decision log 13.1, 14.5)
 
 
 def check_actor_coding() -> None:

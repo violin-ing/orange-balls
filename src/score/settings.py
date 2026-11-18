@@ -13,8 +13,11 @@ The defaults:
       prior_strength 20,
       pseudo_events 1
       media_window_days 30
-      low_data_events 50
-      min-max floor of 0.1
+      min-max floor of 0.1 (geometric variant only)
+
+Bands (decision log 14.1 to 14.3): five internal bands, with cut points at
+the 5th, 20th, 50th and 80th percentiles of the reference period's
+composite scores, computed once by src.compute_bounds and then frozen.
       
 The method is the weighted arithmetic mean; geometric aggregation is a reported
 variant and is made with geometric_variant().
@@ -31,6 +34,10 @@ DENOMINATORS = ("domestic", "all")
 MEDIA_METHODS = ("cross_country", "deviation")
 UNREST_WEIGHTINGS = ("tiers", "count", "goldstein")
 BOUNDS = ("fixed", "per_run")
+BAND_METHODS = ("reference", "equal_width")
+
+# Percentile split for the comparison run of 14.2 (equal fifths)
+EQUAL_FIFTHS: tuple[float, ...] = (20.0, 40.0, 60.0, 80.0)
 
 # Bottom of the min-max range when geometric aggregation is used
 GEOMETRIC_FLOOR = 0.1
@@ -85,9 +92,6 @@ class Settings:
     media_method: str = "cross_country"
     media_window_days: int = 30
 
-    # Below this many events in a day = low data
-    low_data_events: int = 50
-
 
     # --- Combining criteria (src/score/combine.py) ---
 
@@ -121,8 +125,19 @@ class Settings:
     # Band 1 = lowest scores (i.e. the most difficult conditions, like DEFCON)
     bands: int = 5
 
-    # Band cuts to control how continuous numerical scores are converted into
-    # categories (empty = equal width categories)
+    # How the cut points between bands are set:
+    # > "reference" = percentiles of the reference period's composite
+    #                 scores, computed once by src.compute_bounds and frozen
+    #                 (decision log 14.1)
+    # > "equal_width" = equal slices of the min-max range (the old default)
+    band_method: str = "reference"
+
+    # The percentiles used by "reference": 5/15/30/30/20 per cent of
+    # reference-period scores in bands 1 to 5 (decision log 14.2)
+    band_percentiles: tuple[float, ...] = (5.0, 20.0, 50.0, 80.0)
+
+    # Explicit cut points on the score scale. If given, these override
+    # band_method (e.g. for testing)
     band_cuts: tuple[float, ...] = ()
 
 
@@ -184,6 +199,20 @@ class Settings:
               "weights must all be positive")
         
         check(self.bands >= 2, "bands must be at least 2")
+
+        check(self.band_method in BAND_METHODS,
+              f"band_method must be one of {BAND_METHODS}")
+
+        if self.band_method == "reference" and not self.band_cuts:
+            check(len(self.band_percentiles) == self.bands - 1,
+                  "band_percentiles needs one fewer value than bands")
+            check(all(0 < p < 100 for p in self.band_percentiles),
+                  "band_percentiles must be between 0 and 100")
+            pairs = zip(self.band_percentiles[:-1],
+                        self.band_percentiles[1:], strict=True)
+            check(all(a < b for a, b in pairs),
+                  "band_percentiles must increase")
+
         if self.band_cuts:
             check(len(self.band_cuts) == self.bands - 1,
                   "band_cuts needs one fewer value than bands")

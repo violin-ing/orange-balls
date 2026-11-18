@@ -102,6 +102,34 @@ def fast_variant(settings: Settings) -> str:
     return hashlib.sha1(text.encode("utf-8")).hexdigest()[:12]
 
 
+# Settings that change a country's composite score (on top of the GDELT
+# ones above). Band cut points come from composite scores, so each
+# combination of these gets its own cut points.
+SCORE_SETTINGS: tuple[str, ...] = (
+    "criteria", "bounds", "cap_percentile", "normalisation",
+    "minmax_floor", "aggregation", "require_all_criteria",
+    "reference_lag_years",
+)
+
+
+def score_variant(settings: Settings) -> str:
+    """
+    A short code naming everything that changes the composite score: the
+    GDELT settings (fast_variant) plus normalisation, aggregation, weights
+    and the criteria scored. Two runs with the same code produce the same
+    scores, so they can share band cut points. The band percentiles are not
+    part of it: each percentile is stored as its own row.
+    """
+    described = {name: getattr(settings, name) for name in SCORE_SETTINGS}
+    described["criteria"] = list(settings.criteria)
+    described["weights"] = sorted(settings.weights.items())
+    described["fast"] = fast_variant(settings)
+
+    text = json.dumps(described, sort_keys=True)
+
+    return hashlib.sha1(text.encode("utf-8")).hexdigest()[:12]
+
+
 def _now() -> str:
     return datetime.now(UTC).isoformat(timespec="seconds")
 

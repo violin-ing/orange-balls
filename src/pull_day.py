@@ -29,6 +29,7 @@ from __future__ import annotations
 import argparse
 import logging
 import sqlite3
+import textwrap
 import time
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
@@ -123,9 +124,13 @@ def print_unmatched_actor_codes(
 
     total = sum(unmatched.values())
 
+    if not unmatched:
+        print("\n5. Actor codes that are not a country: none")
+        return
+
     print(
-        f"\n--- actor codes that are not a known country "
-        f"({len(unmatched)} codes, {total:,} uses) ---"
+        f"\n5. Actor codes that are not a country "
+        f"({len(unmatched)} codes, {total:,} uses; left out of the totals)"
     )
 
     # Link each actor country-code column to its corresponding name column
@@ -151,7 +156,7 @@ def print_unmatched_actor_codes(
         # Combine the names and identify the two most common examples
         common = pd.concat(names).value_counts().head(2)
 
-        print(f"  {code}: {count:>6,}  e.g. {list(common.index)}")
+        print(f"   {code:<5} {count:>7,}   e.g. {', '.join(common.index)}")
 
 
 # === 3. Print domestic unrest by event code ===
@@ -197,13 +202,19 @@ def print_unrest_by_code(codes: pd.DataFrame, limit: int = 10) -> None:
     # Rank event codes by frequency and retain the most common ones
     top = by_code.sort_values("events", ascending=False).head(limit)
 
-    print(
-        f"\n--- event code table: {len(codes):,} rows; most common full "
-        "codes in loose unrest (lead_share = share from a lead "
-        "paragraph) ---"
-    )
+    print(f"\n4. Domestic unrest: the {limit} most common event codes")
 
-    print(top.to_string(float_format="{:.1f}".format))
+    # Readable column names for the printed table
+    table = pd.DataFrame({
+        "event code": top.index,
+        "events": top["events"].to_numpy(),
+        "avg Goldstein": top["per_event"].round(1).to_numpy(),
+        "from lead paragraph": (top["lead_share"] * 100).round(0)
+            .astype(int).astype(str).to_numpy(),
+    })
+    table["from lead paragraph"] += "%"
+
+    print(textwrap.indent(table.to_string(index=False), "   "))
 
 
 # === 4. Download and process one day of GDELT data ===
@@ -279,64 +290,59 @@ def pull_one_day(
 
     if verbose:
 
-        print(f"{target}: {len(files)} of {FILES_PER_DAY} export files listed")
-        print(f"files ready: {len(paths)}, skipped: {len(skipped)}")
-        print(f"event rows read: {len(events):,}")
-        print(f"dropped: {dropped}")
+        print(f"\n=== GDELT pull for {target} ===")
 
-        # Calculate the proportion of input rows without a usable country
+        print("\n1. Download")
+        print(f"   export files listed      {len(files)} of {FILES_PER_DAY}")
+        print(f"   downloaded               {len(paths)} "
+              f"({len(skipped)} skipped)")
+        print(f"   event rows read          {len(events):,}")
+
+        # Share of input rows without a usable country
         no_country = dropped["no_country"] / dropped["rows_in"]
-        print(f"rows with no usable country: {no_country:.1%}")
 
-        print(f"country-day rows: {len(table)}, countries: {countries}")
+        print("\n2. Clean and match events to countries")
+        print(f"   duplicate events removed {dropped['duplicate_event']:,}")
+        print(f"   rows with a bad date     {dropped['bad_date']:,}")
+        print(f"   rows with no country     {dropped['no_country']:,} "
+              f"({no_country:.1%})")
+        print(f"   rows used                {dropped['rows_used']:,}")
+        unusual = int(table["root_other"].sum())
+        print(f"   unusual root codes       {unusual:,}")
+        print(f"   countries                {countries}")
 
-        # Check how many aggregated records and events are present per date
-        print("\n--- rows per date (expect one date) ---")
+        # Every row should belong to the day being pulled
+        dates = table["date"].nunique()
+        if dates != 1:
+            print(f"   NOTE: the table covers {dates} dates (expected 1)")
 
-        per_date = table.groupby("date")["n_events"].agg(["count", "sum"])
-        print(per_date.to_string())
+        print("\n3. Country totals for the day (the 10 countries with "
+              "the most events)")
 
-        print("\n--- ten countries with the most events ---")
-
-        columns = [
-            "iso3",
-            "n_events",
-            "tone_mean",
-            "unrest_events",
-            "unrest_goldstein",
-            "media_pressure_events",
-            "intl_conflict_events",
-            "intl_conflict_goldstein",
-            "intl_coop_events",
-        ]
+        # Readable column names for the printed table
+        columns = {
+            "iso3": "country",
+            "n_events": "events",
+            "tone_mean": "avg tone",
+            "unrest_events": "unrest",
+            "unrest_goldstein": "unrest Goldstein",
+            "media_pressure_events": "media pressure",
+            "intl_conflict_events": "intl conflict",
+            "intl_conflict_goldstein": "conflict Goldstein",
+            "intl_coop_events": "intl cooperation",
+        }
 
         # Rank countries by event frequency and retain the top ten
         top = table.sort_values("n_events", ascending=False).head(10)
 
-        print(
-            top[columns].to_string(
-                index=False, float_format="{:.1f}".format
-            )
-        )
+        print(textwrap.indent(
+            top[list(columns)].rename(columns=columns).to_string(
+                index=False, float_format="{:.1f}".format),
+            "   ",
+        ))
 
         print_unrest_by_code(codes)
         print_unmatched_actor_codes(events, unmatched)
-
-        print(
-            f"\nevents with an unusual root code: "
-            f"{table['root_other'].sum()}"
-        )
-
-        print(f"total time: {time.perf_counter() - started:.0f}s")
-
-        # Flag whether the downloaded data represents a complete day
-        if complete:
-            print("\nFULL DAY PULL OK")
-        else:
-            print(
-                "\nNOTE: this is not a complete day, so the totals "
-                "are low."
-            )
 
     # === 5. Save the aggregated results ===
 
@@ -359,11 +365,17 @@ def pull_one_day(
 
     label = "complete day" if complete else "INCOMPLETE day"
 
-    if verbose and connection is not None:
-        print(f"{saved_text} for {target} to {DB_PATH} ({label})")
+    if verbose:
+        print("\n6. Save")
+        print(f"   {saved_text}" + (f" to {DB_PATH}" if connection else ""))
+        print(f"   time taken: {time.perf_counter() - started:.0f}s")
 
-    elif verbose:
-        print(saved_text)
+        # Flag whether the downloaded data represents a complete day
+        if complete:
+            print("\nDone: full day pulled.")
+        else:
+            print("\nDone, but this is NOT a complete day, so the totals "
+                  "are low.")
 
     else:
         print(

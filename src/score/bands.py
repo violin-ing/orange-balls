@@ -6,15 +6,29 @@ Turns country scores into bands, and bands into descriptions.
     default). Band 1 holds the lowest scores, i.e. the most difficult
     conditions, as in DEFCON, where 1 is the most severe.
 
-    Cut points come from Settings.band_cuts, or, when it is empty, divide the
-    min-max range [minmax_floor, 1] into equal widths. Because the
-    normalisation bounds are fixed (src/score/bounds.py), the cut points are
-    fixed too, so a band means the same thing on every date. z-scores have no
-    fixed range: without explicit cut points they get no band.
+    Where the cut points come from (decision log 14.1 and 14.2):
+        "reference" (default): the 5th, 20th, 50th and 80th percentiles of
+            every country's composite score on every reference-period day
+            (Settings.band_percentiles), so roughly 5/15/30/30/20 per cent
+            of countries fall in bands 1 to 5 at the reference date.
+            src.compute_bounds works them out once and stores them in the
+            band_cuts table; they are then frozen, like the normalisation
+            bounds. If conditions worsen later, more countries fall into
+            band 1, which is what an alert scale should do.
+        "equal_width": equal slices of the min-max range [minmax_floor, 1]
+            (the old default; 95% of countries landed in bands 3 and 4).
+        Settings.band_cuts: explicit cut points, overriding both.
+    Scores depend on the settings (aggregation, weights, ...), so each
+    combination has its own stored cut points (score_variant in
+    src/score/bounds.py). z-scores have no fixed range: without explicit
+    or stored cut points they get no band.
 
     The score's uncertainty is shown as a band range, with the bands of:
         band_low    score - 1.96 x se
         band_high   score + 1.96 x se
+    band_uncertain is True when the range spans more than one band, i.e.
+    the data does not pin the country to a band. This replaces the old
+    low-data flag based on a count of events (decision log 14.5).
 
 === Descriptions ===
     One row per band and audience, with columns:
@@ -43,12 +57,15 @@ Turns country scores into bands, and bands into descriptions.
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
 
+from src.score.bounds import score_variant
 from src.score.settings import Settings
+from src.store.database import BAND_CUT_COLUMNS
 
 DESCRIPTIONS_PATH = Path(__file__).with_name("band_descriptions.csv")
 DESCRIPTION_COLUMNS: list[str] = [
@@ -64,23 +81,87 @@ class BadDescriptions(ValueError):
     """
 
 
-def cut_points(settings: Settings) -> np.ndarray | None:
+class MissingBandCuts(ValueError):
+    """
+    Reference cut points were asked for but none are stored for these
+    settings.
+    """
+
+
+def cut_points(
+        settings: Settings,
+        stored: pd.DataFrame | None = None,
+    ) -> np.ndarray | None:
     """
     The cut points between internal bands, lowest first, or None when the
-    scores have no fixed range (z-scores without explicit cut points).
+    scores have no fixed range (z-scores without cut points).
+
+    stored: rows of the band_cuts table (needed for band_method
+    "reference").
     """
     settings.validate()
 
+    # 1. Explicit cut points win
     if settings.band_cuts:
         return np.asarray(settings.band_cuts, dtype=float)
-    
-    if settings.normalisation != "minmax":
-        return None
-    
-    floor = settings.minmax_floor
-    steps = np.arange(1, settings.bands) / settings.bands
 
-    return floor + (1 - floor) * steps
+    # 2. Equal slices of the min-max range
+    if settings.band_method == "equal_width":
+        if settings.normalisation != "minmax":
+            return None
+
+        floor = settings.minmax_floor
+        steps = np.arange(1, settings.bands) / settings.bands
+
+        return floor + (1 - floor) * steps
+
+    # 3. Frozen reference-period percentiles
+    variant = score_variant(settings)
+    rows = pd.DataFrame(columns=BAND_CUT_COLUMNS) if stored is None \
+        else stored[stored["variant"] == variant]
+    # A percentile shared by two splits (e.g. the 20th) is stored once
+    found = rows.drop_duplicates("percentile", keep="last") \
+        .set_index("percentile")["value"]
+    missing = [p for p in settings.band_percentiles if p not in found.index]
+
+    if missing:
+        raise MissingBandCuts(
+            f"no stored band cut points for percentiles {missing} "
+            f"(settings variant {variant}). Run src.compute_bounds for "
+            "these settings, or use band_method='equal_width'."
+        )
+
+    return found.loc[list(settings.band_percentiles)].to_numpy(dtype=float)
+
+
+def reference_cut_rows(
+        scores: pd.DataFrame,
+        settings: Settings,
+    ) -> pd.DataFrame:
+    """
+    Band cut points from reference-period composite scores, as rows for the
+    band_cuts table.
+
+    scores: one row per country and day, with date and score columns (as
+    made by run.reference_scores).
+    """
+    settings.validate()
+    values = scores["score"].to_numpy(dtype=float)
+
+    if len(values) == 0:
+        raise ValueError("no reference scores to take percentiles from")
+
+    cuts = np.percentile(values, settings.band_percentiles)
+    computed_at = datetime.now(UTC).isoformat(timespec="seconds")
+
+    return pd.DataFrame({
+        "variant": score_variant(settings),
+        "percentile": [float(p) for p in settings.band_percentiles],
+        "value": cuts,
+        "reference_start": str(scores["date"].min()),
+        "reference_end": str(scores["date"].max()),
+        "computed_at": computed_at,
+    }, columns=BAND_CUT_COLUMNS)
 
 
 def band_of(scores: np.ndarray | pd.Series, cuts: np.ndarray) -> np.ndarray:
@@ -91,16 +172,21 @@ def band_of(scores: np.ndarray | pd.Series, cuts: np.ndarray) -> np.ndarray:
     return np.digitize(np.asarray(scores, dtype=float), cuts) + 1
 
 
-def assign_bands(scores: pd.DataFrame, settings: Settings) -> pd.DataFrame:
+def assign_bands(
+        scores: pd.DataFrame,
+        cuts: np.ndarray | None,
+    ) -> pd.DataFrame:
     """
-    Add band, band_low and band_high to a table with score and score_se
-    columns (as made by combine.aggregate).
+    Add band, band_low, band_high and band_uncertain to a table with score
+    and score_se columns (as made by combine.aggregate). cuts: from
+    cut_points(); None gives missing values.
     """
-    cuts = cut_points(settings)
     out = scores.copy()
     if cuts is None:
         for column in ("band", "band_low", "band_high"):
             out[column] = pd.array([pd.NA] * len(out), dtype="Int64")
+        out["band_uncertain"] = pd.array([pd.NA] * len(out),
+                                         dtype="boolean")
 
         return out
     
@@ -111,6 +197,9 @@ def assign_bands(scores: pd.DataFrame, settings: Settings) -> pd.DataFrame:
 
     for column in ("band", "band_low", "band_high"):
         out[column] = out[column].astype("int64")
+
+    # The data does not pin the country to one band (decision log 14.5)
+    out["band_uncertain"] = out["band_low"] != out["band_high"]
 
     return out
 

@@ -66,7 +66,7 @@ def test_tables_are_created() -> None:
 
     assert names == {
         "country_day", "event_code_day", "pull_log",
-        "reference", "reference_file", "norm_bounds",
+        "reference", "reference_file", "norm_bounds", "band_cuts",
     }, names
 
     connection.close()

@@ -7,8 +7,9 @@ repository root:
 The tests use small, made-up scores, never the real database.
 
 They cover:
-    1. Bands: cut points, which band a score falls in, and the band range from
-        the score's uncertainty.
+    1. Bands: cut points (frozen reference-period percentiles, equal widths,
+        explicit), which band a score falls in, the band range from the
+        score's uncertainty and the band_uncertain flag.
     2. The band description table: the shipped file is valid, a public scale
         with fewer bands than the internal one is allowed, and broken tables
         are refused.
@@ -20,12 +21,15 @@ They cover:
 from __future__ import annotations
 
 import argparse
+from dataclasses import replace
+from datetime import date, timedelta
 
 import numpy as np
 import pandas as pd
 
 from src.score.bands import (
     BadDescriptions,
+    MissingBandCuts,
     assign_bands,
     band_of,
     check_descriptions,
@@ -33,6 +37,7 @@ from src.score.bands import (
     describe,
     load_descriptions,
     public_band,
+    reference_cut_rows,
 )
 from src.score.combine import aggregate
 from src.score.run import ScoreResult
@@ -41,7 +46,15 @@ from src.score.sensitivity import (
     draw_weights,
     weights_monte_carlo,
 )
-from src.score.settings import InvalidSettings, Settings, geometric_variant
+from src.score.settings import (
+    EQUAL_FIFTHS,
+    InvalidSettings,
+    Settings,
+    geometric_variant,
+)
+
+EQUAL = Settings(band_method="equal_width")
+EQUAL_CUTS = np.array([0.2, 0.4, 0.6, 0.8])
 
 
 def expect_error(error_type, function, *args, contains: str = "") -> None:
@@ -55,29 +68,82 @@ def expect_error(error_type, function, *args, contains: str = "") -> None:
 
 # === BANDS ===
 
-def test_default_cut_points_are_equal_widths() -> None:
-    assert np.allclose(cut_points(Settings()), [0.2, 0.4, 0.6, 0.8])
+def reference(n: int = 101) -> pd.DataFrame:
+    """
+    Made-up reference-period scores: 0.00, 0.01, ... 1.00 spread over a
+    few days, so each percentile is easy to work out by hand.
+    """
+    start = date(2026, 8, 1)
+    return pd.DataFrame({
+        "date": [start + timedelta(days=i % 5) for i in range(n)],
+        "iso3": [f"C{i}" for i in range(n)],
+        "score": np.linspace(0, 1, n),
+    })
+
+
+def test_reference_cut_points_are_the_stored_percentiles() -> None:
+    rows = reference_cut_rows(reference(), Settings())
+
+    # 5th, 20th, 50th and 80th percentiles of 0.00 ... 1.00
+    assert np.allclose(rows["value"], [0.05, 0.2, 0.5, 0.8])
+    assert np.allclose(cut_points(Settings(), rows), [0.05, 0.2, 0.5, 0.8])
+    assert rows["reference_start"].iloc[0] == "2026-08-01"
+    assert rows["reference_end"].iloc[0] == "2026-08-05"
+
+    # they put 5/15/30/30/20 per cent of the reference scores in bands 1-5
+    bands = band_of(reference(1001)["score"], cut_points(Settings(), rows))
+    shares = np.bincount(bands, minlength=6)[1:] / 1001
+    assert np.allclose(shares, [0.05, 0.15, 0.30, 0.30, 0.20], atol=0.002)
+
+
+def test_equal_fifths_are_stored_alongside() -> None:
+    fifths = replace(Settings(), band_percentiles=EQUAL_FIFTHS)
+    rows = pd.concat([reference_cut_rows(reference(), Settings()),
+                      reference_cut_rows(reference(), fifths)])
+
+    assert np.allclose(cut_points(fifths, rows), [0.2, 0.4, 0.6, 0.8])
+    assert np.allclose(cut_points(Settings(), rows),
+                       [0.05, 0.2, 0.5, 0.8])
+
+
+def test_missing_reference_cut_points_are_refused() -> None:
+    expect_error(MissingBandCuts, cut_points, Settings(), None,
+                 contains="compute_bounds")
+
+    # cut points belong to the settings that made the scores
+    rows = reference_cut_rows(reference(), Settings())
+    expect_error(MissingBandCuts, cut_points, geometric_variant(Settings()),
+                 rows, contains="compute_bounds")
+
+
+def test_equal_width_and_explicit_cut_points() -> None:
+    assert np.allclose(cut_points(EQUAL), EQUAL_CUTS)
 
     # geometric variant: equal widths over [0.1, 1]
-    assert np.allclose(cut_points(geometric_variant(Settings())),
+    assert np.allclose(cut_points(geometric_variant(EQUAL)),
                        [0.28, 0.46, 0.64, 0.82])
-    assert np.allclose(cut_points(Settings(bands=3)), [1 / 3, 2 / 3])
+    assert np.allclose(cut_points(replace(EQUAL, bands=3)), [1 / 3, 2 / 3])
 
+    # explicit cut points override either method
     explicit = Settings(band_cuts=(0.3, 0.5, 0.7, 0.9))
     assert np.allclose(cut_points(explicit), [0.3, 0.5, 0.7, 0.9])
 
     # z-scores have no fixed range
-    assert cut_points(Settings(normalisation="zscore")) is None
+    assert cut_points(replace(EQUAL, normalisation="zscore")) is None
 
 
 def test_bad_cut_points_are_refused() -> None:
     for bad in (Settings(band_cuts=(0.5,)),
-                Settings(band_cuts=(0.2, 0.6, 0.4, 0.8))):
+                Settings(band_cuts=(0.2, 0.6, 0.4, 0.8)),
+                Settings(band_percentiles=(5.0, 20.0, 50.0)),
+                Settings(band_percentiles=(20.0, 5.0, 50.0, 80.0)),
+                Settings(band_percentiles=(0.0, 20.0, 50.0, 80.0)),
+                Settings(band_method="quantile")):
         expect_error(InvalidSettings, bad.validate)
 
 
 def test_band_1_holds_the_lowest_scores() -> None:
-    cuts = cut_points(Settings())
+    cuts = EQUAL_CUTS
     found = band_of([0.0, 0.19, 0.2, 0.55, 0.99, 1.0], cuts).tolist()
 
     # A score exactly on a cut point goes to the higher band
@@ -89,19 +155,23 @@ def test_band_range_comes_from_the_standard_error() -> None:
                            "score_se": [0.0, 0.1, 0.1]},
                           index=["A", "B", "C"])
     
-    banded = assign_bands(scores, Settings())
+    banded = assign_bands(scores, EQUAL_CUTS)
     assert banded["band"].tolist() == [3, 3, 1]
 
     # 0.5 -+ 1.96 x 0.1 = 0.304 to 0.696
     assert banded["band_low"].tolist() == [3, 2, 1]
     assert banded["band_high"].tolist() == [3, 4, 2]
 
+    # flagged when the data does not pin the country to one band (14.5)
+    assert banded["band_uncertain"].tolist() == [False, True, True]
+
 
 def test_zscores_get_no_band_without_cut_points() -> None:
     scores = pd.DataFrame({"score": [0.3], "score_se": [0.1]})
 
-    banded = assign_bands(scores, Settings(normalisation="zscore"))
+    banded = assign_bands(scores, None)
     assert banded["band"].isna().all()
+    assert banded["band_uncertain"].isna().all()
 
 
 # === DESCRIPTIONS ===
@@ -164,14 +234,18 @@ def test_describe_gives_each_audience_its_own_wording() -> None:
 
 # === WEIGHTS SENSITIVITY ===
 
-def result_for(norm: pd.DataFrame, settings: Settings) -> ScoreResult:
+def result_for(
+        norm: pd.DataFrame,
+        settings: Settings,
+        cuts: np.ndarray | None = EQUAL_CUTS,
+    ) -> ScoreResult:
     se = norm * 0 + 0.01
-    scores = assign_bands(aggregate(norm, se, settings), settings)
+    scores = assign_bands(aggregate(norm, se, settings), cuts)
     empty = pd.DataFrame()
 
     return ScoreResult(
         values=norm, ses=se, norm=norm, norm_se=se, scores=scores,
-        fast=empty, reference_year=2025, fast_variant="x",
+        fast=empty, reference_year=2025, fast_variant="x", cuts=cuts,
     )
 
 
@@ -238,22 +312,26 @@ def test_the_geometric_variant_can_be_tested_too() -> None:
     settings = geometric_variant(Settings())
     norm = NORM.clip(lower=0.1)
 
-    mc = weights_monte_carlo(result_for(norm, settings), settings, draws=200)
+    cuts = cut_points(geometric_variant(EQUAL))
+    mc = weights_monte_carlo(result_for(norm, settings, cuts), settings,
+                             draws=200)
     assert mc.countries.loc["STEADY", "changed_share"] == 0.0
 
 
-def test_zscores_without_cut_points_are_refused() -> None:
-    settings = Settings(normalisation="zscore")
-    result = result_for(NORM, Settings())
+def test_a_run_without_bands_is_refused() -> None:
+    result = result_for(NORM, Settings(), cuts=None)
 
-    expect_error(ValueError, weights_monte_carlo, result, settings,
+    expect_error(ValueError, weights_monte_carlo, result, Settings(),
                  contains="no bands")
 
 
 def main() -> None:
     argparse.ArgumentParser().parse_args()
     tests = [
-        test_default_cut_points_are_equal_widths,
+        test_reference_cut_points_are_the_stored_percentiles,
+        test_equal_fifths_are_stored_alongside,
+        test_missing_reference_cut_points_are_refused,
+        test_equal_width_and_explicit_cut_points,
         test_bad_cut_points_are_refused,
         test_band_1_holds_the_lowest_scores,
         test_band_range_comes_from_the_standard_error,
@@ -267,7 +345,7 @@ def main() -> None:
         test_the_base_band_matches_the_scoring_run,
         test_the_same_seed_gives_the_same_answer,
         test_the_geometric_variant_can_be_tested_too,
-        test_zscores_without_cut_points_are_refused,
+        test_a_run_without_bands_is_refused,
     ]
     for test in tests:
         test()

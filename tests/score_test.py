@@ -53,6 +53,7 @@ import numpy as np
 import pandas as pd
 
 from src.reference.variables import with_role
+from src.score.bands import MissingBandCuts, reference_cut_rows
 from src.score.bounds import (
     SLOW_VARIANT,
     fast_bounds,
@@ -70,7 +71,7 @@ from src.score.fast import (
     load_tiers,
     tier_weights,
 )
-from src.score.run import ScoreInputs, score_countries
+from src.score.run import ScoreInputs, reference_scores, score_countries
 from src.score.settings import InvalidSettings, Settings
 from src.store.database import BOUNDS_COLUMNS
 
@@ -304,7 +305,8 @@ def test_few_events_mean_a_wider_band() -> None:
     assert abs(big["value"] - 1.0) < 0.01
     assert small["se"] > 5 * big["se"]
 
-    assert bool(small["low_data"]) and not bool(big["low_data"])
+    # the counts behind the wider error stay in the output as a diagnostic
+    assert small["n_today"] < big["n_today"]
 
 
 def test_one_unusual_event_in_a_small_country_is_damped() -> None:
@@ -641,9 +643,22 @@ def make_score_inputs(settings: Settings) -> ScoreInputs:
     )
 
 
+def with_cuts(inputs: ScoreInputs, settings: Settings) -> ScoreInputs:
+    """
+    Add band cut points for these settings, worked out the way
+    compute_bounds does it, with DAY as the whole reference period.
+    """
+    scores, _ = reference_scores(inputs, [DAY], settings)
+    rows = reference_cut_rows(scores, settings)
+    inputs.band_cuts = pd.concat([inputs.band_cuts, rows],
+                                 ignore_index=True)
+    return inputs
+
+
 def test_a_whole_run_scores_every_country() -> None:
     settings = Settings()
-    result = score_countries(make_score_inputs(settings), DAY, settings)
+    inputs = with_cuts(make_score_inputs(settings), settings)
+    result = score_countries(inputs, DAY, settings)
 
     assert result.reference_year == DAY.year - 1
     assert list(result.values.columns) == list(FAST_CRITERIA) + SLOW
@@ -658,6 +673,10 @@ def test_a_whole_run_scores_every_country() -> None:
     assert bands.isin([1, 2, 3, 4, 5]).all().all()
     assert (bands["band_low"] <= bands["band"]).all()
     assert (bands["band"] <= bands["band_high"]).all()
+    assert result.scores["band_uncertain"].dtype == bool
+
+    # the cut points used are the stored reference-period ones
+    assert result.cuts is not None and len(result.cuts) == 4
 
     # BIG should score higher than MID overall.
     # Shutdown capacity is the exception: lower values are better.
@@ -675,12 +694,33 @@ def test_a_run_can_score_the_structural_criteria_only() -> None:
     Ten criteria versus the six structural ones only.
     """
     settings = Settings(criteria=tuple(SLOW))
-    result = score_countries(make_score_inputs(Settings()), DAY, settings)
+    inputs = with_cuts(make_score_inputs(Settings()), settings)
+    result = score_countries(inputs, DAY, settings)
 
     assert list(result.values.columns) == SLOW
     assert result.fast.empty
     assert len(SLOW) == 6
     assert (result.scores["n_criteria"] == 6).all()
+
+
+def test_a_run_without_stored_cut_points_is_refused() -> None:
+    """
+    Bands need the frozen cut points from compute_bounds, and each set of
+    settings has its own.
+    """
+    inputs = make_score_inputs(Settings())
+    expect_error(MissingBandCuts, score_countries, inputs, DAY, Settings(),
+                 contains="compute_bounds")
+
+    # cut points stored for other settings do not count
+    other = Settings(criteria=tuple(SLOW))
+    inputs = with_cuts(inputs, other)
+    expect_error(MissingBandCuts, score_countries, inputs, DAY, Settings(),
+                 contains="compute_bounds")
+
+    # equal-width bands need nothing stored
+    plain = Settings(band_method="equal_width")
+    assert len(score_countries(inputs, DAY, plain).scores) == 3
 
 
 def test_unknown_or_validation_criteria_are_refused() -> None:
@@ -730,6 +770,7 @@ def main() -> None:
         test_reference_days_without_history_are_skipped,
         test_a_whole_run_scores_every_country,
         test_a_run_can_score_the_structural_criteria_only,
+        test_a_run_without_stored_cut_points_is_refused,
         test_unknown_or_validation_criteria_are_refused,
     ]
 

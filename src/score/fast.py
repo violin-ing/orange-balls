@@ -52,7 +52,9 @@ used for the score, while the sum of squared weights is used when estimating
 uncertainty. With no weighting, this is equivalent to ordinary event counting.
 
 The output includes the score, its standard error, the event counts used in the
-calculation, the calculation method and a low-data flag.
+calculation and the calculation method. There is no low-data flag here:
+thin data shows up as a wider band range (src/score/bands.py, decision log
+14.5), and the counts stay in the output as a diagnostic.
 
 Performance and separation of responsibilities:
 
@@ -102,7 +104,7 @@ TIERS_PATH = Path(__file__).with_name("unrest_tiers.csv")
 
 OUTPUT_COLUMNS: list[str] = [
     "iso3", "criterion", "value", "se", "method",
-    "k_today", "n_today", "k_window", "n_window", "low_data",
+    "k_today", "n_today", "k_window", "n_window",
 ]
 
 
@@ -329,7 +331,7 @@ def fast_criteria(
     """
     One row per country and criterion for the assessment date, with columns
     value, se (standard error), method ("deviation" or "share"), the counts
-    behind it, and a low_data flag.
+    behind it.
 
     Only the criteria chosen in settings.criteria are computed (all four by 
     default). Never returns a missing or infinite value: it raises instead, so
@@ -432,7 +434,6 @@ def fast_criteria(
 
         out = frame.assign(
             criterion=criterion, value=value, se=se, method=method,
-            low_data=frame["n_today"] < settings.low_data_events,
         ).reset_index()
         rows.append(out)
 

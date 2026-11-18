@@ -66,24 +66,32 @@ Main functions:
 from __future__ import annotations
 
 import sqlite3
+from collections.abc import Iterable
 from dataclasses import dataclass, field, replace
 from datetime import date
 
+import numpy as np
 import pandas as pd
 
 from src.reference.variables import VARIABLES, with_role
-from src.score.bands import assign_bands
-from src.score.bounds import SLOW_VARIANT, fast_variant
+from src.score.bands import assign_bands, cut_points
+from src.score.bounds import SLOW_VARIANT, fast_variant, score_variant
 from src.score.combine import aggregate, normalise
 from src.score.fast import (
     FAST_CRITERIA,
     FAST_HIGHER_IS_BETTER,
     FastInputs,
+    InsufficientHistory,
     fast_criteria,
     load_fast_inputs,
 )
 from src.score.settings import Settings
-from src.store.database import load_bounds, load_reference
+from src.store.database import (
+    BAND_CUT_COLUMNS,
+    load_band_cuts,
+    load_bounds,
+    load_reference,
+)
 
 
 @dataclass
@@ -94,6 +102,8 @@ class ScoreInputs:
     fast: FastInputs
     reference: pd.DataFrame # long reference table
     bounds: pd.DataFrame # stored normalisation bounds
+    band_cuts: pd.DataFrame = field(  # stored band cut points
+        default_factory=lambda: pd.DataFrame(columns=BAND_CUT_COLUMNS))
 
 
 @dataclass
@@ -103,11 +113,13 @@ class ScoreResult:
     norm: pd.DataFrame # normalised, higher = better
     norm_se: pd.DataFrame
     scores: pd.DataFrame # score, score_se, n_criteria, band, band_low,
-                         # band_high
+                         # band_high, band_uncertain
     fast: pd.DataFrame # fast_criteria() output, with counts
     reference_year: int
     fast_variant: str
     clipped: dict[str, int] = field(default_factory=dict)
+    cuts: np.ndarray | None = None # the band cut points used
+    score_variant: str = ""
 
 
 def chosen_criteria(settings: Settings) -> list[str]:
@@ -161,8 +173,10 @@ def load_score_inputs(
                                start_year=year, end_year=year)
     bounds = load_bounds(connection,
                          [SLOW_VARIANT, fast_variant(settings)])
-    
-    return ScoreInputs(fast=fast, reference=reference, bounds=bounds)
+    band_cuts = load_band_cuts(connection, [score_variant(settings)])
+
+    return ScoreInputs(fast=fast, reference=reference, bounds=bounds,
+                       band_cuts=band_cuts)
 
 
 def _wide(long: pd.DataFrame, column: str, names: list[str]) -> pd.DataFrame:
@@ -227,10 +241,54 @@ def score_countries(
     bounds = bounds[wanted].set_index("criterion")
 
     norm, norm_se = normalise(values, ses, directions(), settings, bounds)
-    scores = assign_bands(aggregate(norm, norm_se, settings), settings)
+    cuts = cut_points(settings, inputs.band_cuts)
+    scores = assign_bands(aggregate(norm, norm_se, settings), cuts)
 
     return ScoreResult(
         values=values, ses=ses, norm=norm, norm_se=norm_se,
         scores=scores, fast=fast, reference_year=year,
         fast_variant=variant, clipped=norm.attrs.get("clipped", {}),
+        cuts=cuts, score_variant=score_variant(settings),
     )
+
+
+def reference_scores(
+        inputs: ScoreInputs,
+        days: Iterable[date],
+        settings: Settings,
+    ) -> tuple[pd.DataFrame, list[date]]:
+    """
+    Every country's composite score on every given day, for working out the
+    band cut points (decision log 14.1). One row per country and day:
+    date, iso3, score. Days without enough GDELT history are skipped and
+    returned separately.
+
+    inputs must cover the whole period: GDELT counts from before the first
+    day, and structural values for every reference year needed.
+    """
+    # Bands are not needed here (they are what is being worked out), so
+    # score with equal-width cuts, which need nothing stored
+    plain = replace(settings, band_method="equal_width", band_cuts=())
+    frames: list[pd.DataFrame] = []
+    skipped: list[date] = []
+
+    for day in days:
+        try:
+            result = score_countries(inputs, day, plain)
+        except InsufficientHistory:
+            skipped.append(day)
+            continue
+
+        frames.append(pd.DataFrame({
+            "date": day,
+            "iso3": result.scores.index,
+            "score": result.scores["score"].to_numpy(),
+        }))
+
+    if not frames:
+        raise InsufficientHistory(
+            "no reference day could be scored, so band cut points cannot "
+            "be worked out"
+        )
+
+    return pd.concat(frames, ignore_index=True), skipped

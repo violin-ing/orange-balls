@@ -23,6 +23,9 @@ The database contains six tables:
     6. norm_bounds: fixed normalisation bounds for each criterion and settings 
         variant
 
+    7. band_cuts: the frozen cut points between bands, one row per score
+        settings variant and percentile (decision log 14.1)
+
 Important details:
     - Saving a day replaces any existing data for that day, rather than
         creating duplicates.
@@ -104,6 +107,11 @@ REFERENCE_FILE_COLUMNS: list[str] = [
 BOUNDS_COLUMNS: list[str] = [
     "criterion", "variant", "lower", "upper", "mean", "sd", "method",
     "reference_start", "reference_end", "computed_at",
+]
+
+BAND_CUT_COLUMNS: list[str] = [
+    "variant", "percentile", "value", "reference_start", "reference_end",
+    "computed_at",
 ]
 
 
@@ -215,6 +223,19 @@ def connect(path: Path | str = DB_PATH) -> sqlite3.Connection:
         )
     """)
 
+    # Create band_cuts
+    connection.execute("""
+        CREATE TABLE IF NOT EXISTS band_cuts (
+            variant TEXT NOT NULL,
+            percentile REAL NOT NULL,
+            value REAL NOT NULL,
+            reference_start TEXT NOT NULL,
+            reference_end TEXT NOT NULL,
+            computed_at TEXT NOT NULL,
+            PRIMARY KEY (variant, percentile)
+        )
+    """)
+
     connection.commit()
 
     # Check for outdated columns
@@ -225,6 +246,7 @@ def connect(path: Path | str = DB_PATH) -> sqlite3.Connection:
         "reference": REFERENCE_COLUMNS,
         "reference_file": REFERENCE_FILE_COLUMNS,
         "norm_bounds": BOUNDS_COLUMNS,
+        "band_cuts": BAND_CUT_COLUMNS,
     }
     for table_name, columns in expected.items():
         found = [
@@ -596,6 +618,50 @@ def load_bounds(
     query = (
         f"SELECT {', '.join(BOUNDS_COLUMNS)} FROM norm_bounds {where} "
         "ORDER BY criterion, variant"
+    )
+
+    return pd.read_sql_query(query, connection, params=values)
+
+
+def save_band_cuts(connection: sqlite3.Connection, table: pd.DataFrame) -> int:
+    """
+    Store band cut points. A row replaces any stored row for the same
+    variant and percentile; other rows are kept.
+    """
+    if list(table.columns) != BAND_CUT_COLUMNS:
+        raise ValueError(
+            f"Band cut table columns should be {BAND_CUT_COLUMNS}, "
+            f"got {list(table.columns)}"
+        )
+
+    rows = table.astype(object).where(table.notna(), None)
+
+    query = (
+        f"INSERT OR REPLACE INTO band_cuts ({', '.join(BAND_CUT_COLUMNS)}) "
+        f"VALUES ({', '.join('?' for _ in BAND_CUT_COLUMNS)})"
+    )
+
+    with connection:
+        connection.executemany(query, rows.itertuples(index=False, name=None))
+
+    return len(rows)
+
+
+def load_band_cuts(
+        connection: sqlite3.Connection,
+        variants: list[str] | None = None,
+    ) -> pd.DataFrame:
+    """
+    Stored band cut points, optionally for some variants only.
+    """
+    where, values = "", []
+    if variants is not None:
+        where = f"WHERE variant IN ({', '.join('?' for _ in variants)})"
+        values = list(variants)
+
+    query = (
+        f"SELECT {', '.join(BAND_CUT_COLUMNS)} FROM band_cuts {where} "
+        "ORDER BY variant, percentile"
     )
 
     return pd.read_sql_query(query, connection, params=values)
