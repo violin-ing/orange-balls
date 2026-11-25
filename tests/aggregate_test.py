@@ -19,10 +19,12 @@ import pandas as pd
 
 from src.gdelt.download import read_events
 from src.transform.aggregate import (
+    PAIR_COLUMNS,
     UNREST_LOOSE_ROOT_CODES,
     UNREST_ROOT_CODES,
     to_country_day,
     to_event_code_day,
+    to_pair_day,
 )
 
 CACHE_DIR = Path("data/cache/gdelt")
@@ -406,6 +408,26 @@ def test_event_code_table_agrees_with_country_day() -> None:
             )
 
 
+def test_pair_table_counts_events_between_two_countries() -> None:
+    pairs = to_pair_day(make_events())
+    found = {
+        (str(r.date.date()), r.actor1, r.actor2):
+            (r.n_events, r.n_coop, r.n_conflict, r.n_material_conflict)
+        for r in pairs.itertuples()
+    }
+
+    assert found == {
+        # (a) cooperation, USA acting on GBR
+        ("2026-10-05", "USA", "GBR"): (1, 1, 0, 0),
+        # (d) material conflict, NGA acting on USA; the repeat is ignored
+        ("2026-10-05", "NGA", "USA"): (1, 0, 1, 1),
+        # (f) no location, but two countries: still a pair
+        ("2026-10-05", "FRA", "DEU"): (1, 1, 0, 0),
+    }
+    # (e) the EU is not a country and (h) USA on USA is not a pair
+    assert list(pairs.columns) == PAIR_COLUMNS
+
+
 def test_dropped_rows_are_recorded() -> None:
     table = to_country_day(make_events())
 
@@ -553,6 +575,7 @@ def main() -> None:
         test_goldstein_sums,
         test_event_code_table,
         test_event_code_table_agrees_with_country_day,
+        test_pair_table_counts_events_between_two_countries,
         test_dropped_rows_are_recorded,
         test_date_comes_from_dateadded_not_day,
         test_no_source_url_in_output,

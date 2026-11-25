@@ -5,7 +5,7 @@ SQLite database.
 SQLite stores the database in a single file and is included with Python, so no
 separate database software is needed.
 
-The database contains eight tables:
+The database contains nine tables:
     
     1. country_day: daily totals and measurements for each country
     
@@ -32,6 +32,11 @@ The database contains eight tables:
         file can be fetched again from GDELT and checked against its MD5, so
         the cache can be deleted at the end of the project (decision log
         18.1, 26.1). It lives in this database, not in the cache folder.
+
+    9. pair_day: events between two different countries, one row per day
+        and ordered pair (actor 1 acting on actor 2): all, cooperative,
+        conflictual and material-conflict events. Feeds the Bilateral View
+        (src/score/pairs.py). Country totals only, like every other table.
 
 Important details:
     - Saving a day replaces any existing data for that day, rather than
@@ -60,6 +65,7 @@ import pandas as pd
 from src.reference.common import REFERENCE_COLUMNS
 from src.transform.aggregate import (
     EVENT_CODE_COLUMNS,
+    PAIR_COLUMNS,
     QUAD_CLASSES,
     ROOT_CODES,
     criterion_columns,
@@ -248,6 +254,20 @@ def connect(path: Path | str = DB_PATH) -> sqlite3.Connection:
         )
     """)
 
+    # Create pair_day (events between two countries)
+    connection.execute("""
+        CREATE TABLE IF NOT EXISTS pair_day (
+            date TEXT NOT NULL,
+            actor1 TEXT NOT NULL,
+            actor2 TEXT NOT NULL,
+            n_events INTEGER NOT NULL,
+            n_coop INTEGER NOT NULL,
+            n_conflict INTEGER NOT NULL,
+            n_material_conflict INTEGER NOT NULL,
+            PRIMARY KEY (date, actor1, actor2)
+        )
+    """)
+
     # Create gdelt_file (the file manifest)
     connection.execute("""
         CREATE TABLE IF NOT EXISTS gdelt_file (
@@ -271,6 +291,7 @@ def connect(path: Path | str = DB_PATH) -> sqlite3.Connection:
         "norm_bounds": BOUNDS_COLUMNS,
         "band_cuts": BAND_CUT_COLUMNS,
         "gdelt_file": MANIFEST_COLUMNS,
+        "pair_day": PAIR_COLUMNS,
     }
     for table_name, columns in expected.items():
         found = [
@@ -317,14 +338,17 @@ def save_day(
         files_read: int,
         codes: pd.DataFrame | None = None,
         manifest: pd.DataFrame | None = None,
+        pairs: pd.DataFrame | None = None,
     ) -> int:
     """
     Store one day's country-day table, its event code table, its pull
-    record and, if given, its file manifest (MANIFEST_COLUMNS).
+    record and, if given, its file manifest (MANIFEST_COLUMNS) and its
+    country-pair table (PAIR_COLUMNS).
 
     If the day exists, its old rows are removed first. If codes is None, 
     the day's event code rows are removed and none are written. If manifest
-    is None, the day's stored manifest is left as it is.
+    or pairs is None, the day's stored rows of that table are left as they
+    are.
 
     Returns the number of country rows written.
     """
@@ -366,6 +390,16 @@ def save_day(
 
     if manifest is not None:
         _check_manifest(manifest, day_text)
+
+    pair_rows = None
+    if pairs is not None:
+        if list(pairs.columns) != PAIR_COLUMNS:
+            raise ValueError(
+                f"Pair table columns should be {PAIR_COLUMNS}, "
+                f"got {list(pairs.columns)}"
+            )
+        _check_one_day(pairs, day_text, "pair table")
+        pair_rows = _plain_rows(pairs, pd.Series(day_text, index=pairs.index))
 
     log_row = (
         day_text,
@@ -415,6 +449,14 @@ def save_day(
 
         if manifest is not None:
             _write_manifest(connection, manifest, day_text)
+
+        if pair_rows is not None:
+            connection.execute("DELETE FROM pair_day WHERE date = ?",
+                               (day_text,))
+            connection.executemany(
+                insert("pair_day", PAIR_COLUMNS),
+                pair_rows.itertuples(index=False, name=None),
+            )
 
     return len(rows)
 
@@ -569,6 +611,27 @@ def load_event_codes(
         f"SELECT {', '.join(EVENT_CODE_COLUMNS)} FROM event_code_day "
         f"{where} ORDER BY date, iso3, event_code, relation, media_target, "
         "is_root"
+    )
+
+    table = pd.read_sql_query(query, connection, params=values)
+    table["date"] = pd.to_datetime(table["date"], format="%Y-%m-%d")
+
+    return table
+
+
+def load_pair_day(
+        connection: sqlite3.Connection,
+        start: date | None = None,
+        end: date | None = None,
+    ) -> pd.DataFrame:
+    """
+    Read stored country-pair rows back (PAIR_COLUMNS), sorted by date and
+    pair, optionally for a date range only (both ends included).
+    """
+    where, values = _where(start, end, None)
+    query = (
+        f"SELECT {', '.join(PAIR_COLUMNS)} FROM pair_day {where} "
+        "ORDER BY date, actor1, actor2"
     )
 
     table = pd.read_sql_query(query, connection, params=values)

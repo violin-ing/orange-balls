@@ -25,7 +25,7 @@ Then score_countries() uses those inputs to:
 The indicators included in a run are controlled by Settings.criteria.
 
     Empty (default)
-        Uses all four GDELT indicators and all structural variables marked as
+        Uses all five GDELT indicators and all structural variables marked as
         criteria.
 
     A list of names

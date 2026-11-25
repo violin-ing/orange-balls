@@ -5,8 +5,8 @@ text a planner reads for that country (decision log 24.3 and 24.4).
 Two countries in the same band can be there for different reasons, so each
 country gets its band's description plus one line per driving criterion.
 There is one text per criterion, written once (criterion_texts.csv), never a
-text per combination of criteria: the two weakest of ten criteria can be any
-of 45 pairs.
+text per combination of criteria: the two weakest of eleven criteria can be
+any of 55 pairs.
 
 === Which criteria are named (select_drivers) ===
     For each criterion, a country's normalised value (0 to 1, 1 = best) is

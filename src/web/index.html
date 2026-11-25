@@ -1,0 +1,98 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Readiness Assessment</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<!--
+  The readiness front end. It reads:
+    world.json                  map shapes (Natural Earth, public domain)
+    ../../data/web/index.json   the exported dates (python -m src.export_web)
+    ../../data/web/<date>/international.json and bilateral.json
+
+  Browsers do not let a page opened as a file read other files, so serve the
+  repository root and open the page through it:
+    python -m http.server 8000
+    http://localhost:8000/src/web/
+-->
+<div class="page">
+
+<header>
+  <div>
+    <h1>Communication Readiness Assessment</h1>
+    <p>How well each country's current conditions would support the announcement of a SETI detection</p>
+  </div>
+  <div class="controls">
+    <div class="field">
+      <span class="field-label">View</span>
+      <div class="seg" role="group" aria-label="View">
+        <button type="button" data-view="international" aria-pressed="true">International</button>
+        <button type="button" data-view="bilateral" aria-pressed="false">Bilateral</button>
+      </div>
+    </div>
+    <div class="field">
+      <label class="field-label" for="date-select">Assessment date</label>
+      <select id="date-select"></select>
+    </div>
+  </div>
+</header>
+
+<p class="note hidden" id="load-error"></p>
+
+<section class="panel" aria-label="World map">
+  <div class="map-head">
+    <div>
+      <h2 id="map-title">Loading…</h2>
+      <div class="sub" id="map-sub"></div>
+    </div>
+    <div class="field">
+      <label class="field-label" for="find-country">Find a country</label>
+      <select id="find-country"></select>
+    </div>
+  </div>
+  <div class="map" id="map">
+    <svg class="world" id="world" viewBox="0 0 960 470" role="img" aria-label="World map">
+      <defs>
+        <pattern id="nodata-hatch" patternUnits="userSpaceOnUse" width="3" height="3" patternTransform="rotate(45)">
+          <rect width="3" height="3" fill="#e3e5e8"></rect>
+          <rect width="1" height="3" fill="#bfc5cc"></rect>
+        </pattern>
+      </defs>
+      <g id="countries"></g>
+    </svg>
+    <div class="labels" id="labels" aria-hidden="true"></div>
+    <div class="tooltip hidden" id="tooltip"></div>
+    <div class="zoom-buttons">
+      <button type="button" id="zoom-in" aria-label="Zoom in">+</button>
+      <button type="button" id="zoom-out" aria-label="Zoom out">−</button>
+      <button type="button" id="zoom-reset" aria-label="Reset view">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 12a9 9 0 1 0 3-6.7"></path><path d="M3 4v5h5"></path></svg>
+      </button>
+    </div>
+    <div class="zoom-label" id="zoom-label">1.0× zoom</div>
+  </div>
+</section>
+
+<section class="panel" aria-label="Legend and distribution">
+  <div class="legend" id="legend"></div>
+  <div class="field">
+    <span class="field-label" id="dist-label">Countries per band</span>
+    <div class="dist" id="dist"></div>
+  </div>
+</section>
+
+<div class="bottom">
+  <section class="panel" id="detail" aria-label="Country detail"></section>
+  <section class="panel" aria-label="Guide">
+    <h2 id="guide-title">Band guide</h2>
+    <div id="guide"></div>
+  </section>
+</div>
+
+</div>
+<script src="app.js"></script>
+</body>
+</html>

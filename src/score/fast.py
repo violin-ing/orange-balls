@@ -1,11 +1,12 @@
 """
-Calculates four indicators of a country's political and social conditions
+Calculates five indicators of a country's political and social conditions
 using GDELT event data, for a single assessment date.
 
-The aim is to identify whether conditions in a country are unusual compared 
-with what is normal for that country.
+The first four ask whether conditions in a country are unusual compared with
+what is normal for that country. The fifth (relations) is a level compared
+across countries.
 
-The four indicators are:
+The five indicators are:
     1. unrest
         Measures domestic unrest events, excluding events aimed at the media. 
         Events can be weighted by severity, so more serious events contribute 
@@ -21,6 +22,17 @@ The four indicators are:
 
     4. intl_coop
         Measures cooperation involving another country or an IGO.
+
+    5. relations
+        The standing state of a country's international relations: its
+        cooperative events as a share of all its cooperative and
+        conflictual events with other countries and IGOs, over the last
+        baseline_days days, compared across countries (method "share", like
+        media pressure). intl_conflict and intl_coop measure change against
+        the country's own normal, so a long-running conflict is absorbed
+        into its baseline and stops registering; relations keeps it visible.
+        Added on 25 November 2026 to give bilateral conditions more weight
+        in the International View (decision log section 28).
 
 For each indicator, we count the relevant events (k) and divide by the 
 appropriate total number of events (n). This gives us the observed share.
@@ -89,8 +101,12 @@ from src.transform.aggregate import (
 )
 
 FAST_CRITERIA: tuple[str, ...] = (
-    "unrest", "media_pressure", "intl_conflict", "intl_coop",
+    "unrest", "media_pressure", "intl_conflict", "intl_coop", "relations",
 )
+
+# Criteria that are a level over a window, compared across countries,
+# rather than a deviation from the country's own normal
+LEVEL_CRITERIA: tuple[str, ...] = ("relations",)
 
 # True when a high value = better conditions for an announcement
 FAST_HIGHER_IS_BETTER: dict[str, bool] = {
@@ -98,6 +114,7 @@ FAST_HIGHER_IS_BETTER: dict[str, bool] = {
     "media_pressure": False,
     "intl_conflict": False,
     "intl_coop": True,
+    "relations": True,
 }
 
 TIERS_PATH = Path(__file__).with_name("unrest_tiers.csv")
@@ -228,6 +245,20 @@ def build_counts(
     pieces.append(unrest.reset_index().assign(criterion="unrest"))
 
 
+    # --- relations: cooperative share of international events ---
+
+    # k = cooperation, n = cooperation + conflict (both with other countries
+    # or IGOs, as for intl_coop and intl_conflict)
+    rel = country_day[keys + ["intl_coop_events", "intl_conflict_events"]]
+    pieces.append(pd.DataFrame({
+        "iso3": rel["iso3"], "date": rel["date"],
+        "k": rel["intl_coop_events"],
+        "k2": rel["intl_coop_events"],
+        "n": rel["intl_coop_events"] + rel["intl_conflict_events"],
+        "criterion": "relations",
+    }))
+
+
     # --- the other three (from the country-day table) ---
 
     for criterion, k_col, n_col in (
@@ -333,7 +364,7 @@ def fast_criteria(
     value, se (standard error), method ("deviation" or "share"), the counts
     behind it.
 
-    Only the criteria chosen in settings.criteria are computed (all four by 
+    Only the criteria chosen in settings.criteria are computed (all five by 
     default). Never returns a missing or infinite value: it raises instead, so
     nothing undefined reaches normalisation.
     """
@@ -360,6 +391,14 @@ def fast_criteria(
         settings.media_window_days, settings, "media window",
     )
 
+    # Level criteria: the baseline_days days up to and including today
+    level_window = _window_days(
+        inputs.complete_days,
+        assessment_date - timedelta(days=settings.baseline_days - 1),
+        assessment_date,
+        settings.baseline_days, settings, "level window",
+    )
+
     counts = inputs.counts
     if "k2" not in counts.columns: # unweighted counts
         counts = counts.assign(k2=counts["k"])
@@ -373,9 +412,14 @@ def fast_criteria(
         today = c[c["date"] == assessment_date].groupby("iso3")[sums]
         today = today.sum()
 
-        use_share = (criterion == "media_pressure"
-                     and settings.media_method == "cross_country")
-        window_days = media_window if use_share else baseline
+        media_share = (criterion == "media_pressure"
+                       and settings.media_method == "cross_country")
+        use_share = media_share or criterion in LEVEL_CRITERIA
+
+        if criterion in LEVEL_CRITERIA:
+            window_days = level_window
+        else:
+            window_days = media_window if media_share else baseline
         window = c[c["date"].isin(window_days)].groupby("iso3")[sums]
         window = window.sum()
 

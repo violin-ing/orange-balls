@@ -96,7 +96,7 @@ class Settings:
     # --- Combining criteria (src/score/combine.py) ---
 
     # Which criteria are scored:
-    # - Empty = the default set (the four GDELT criteria and the structural 
+    # - Empty = the default set (the five GDELT criteria and the structural 
     #           variables marked "criterion" in src/reference/variables.py)
     criteria: tuple[str, ...] = ()
 

@@ -20,7 +20,10 @@ Options:
 For each day, the script:
     1. Finds the available GDELT export files (96 for a full day)
     2. Downloads the files, skipping any that fail
-    3. Reads and aggregates the events
+    3. Reads and aggregates the events: country totals, event-code
+       totals and country-pair totals (the pair table feeds the Bilateral
+       View; days pulled before it existed get it with --force, which
+       re-aggregates from the cache without downloading again)
     4. Prints a summary of the processed data
     5. Saves the results, unless --no-save is used, together with the day's
        file manifest: every file's address, GDELT's published MD5 checksum,
@@ -71,6 +74,7 @@ from src.transform.aggregate import (
     UNREST_LOOSE_ROOT_CODES,
     to_country_day,
     to_event_code_day,
+    to_pair_day,
 )
 
 # === Settings ===
@@ -346,9 +350,10 @@ def pull_one_day(
     )
 
     try:
-        # Aggregate events into country-day and event-code-day tables
+        # Aggregate events into country-day, event-code-day and pair tables
         table = to_country_day(events)
         codes = to_event_code_day(events)
+        pairs = to_pair_day(events)
 
     except UnknownCountryCode as error:
         print(f"{target}: {len(paths)} files, {len(events):,} event rows")
@@ -386,6 +391,7 @@ def pull_one_day(
         unusual = int(table["root_other"].sum())
         print(f"   unusual root codes       {unusual:,}")
         print(f"   countries                {countries}")
+        print(f"   country pairs            {len(pairs):,}")
 
         # Every row should belong to the day being pulled
         dates = table["date"].nunique()
@@ -431,7 +437,7 @@ def pull_one_day(
         read = {path.name for path in paths}
         written = save_day(
             connection, table, target, len(files), len(paths), codes=codes,
-            manifest=manifest_for(files, target, read),
+            manifest=manifest_for(files, target, read), pairs=pairs,
         )
 
         saved_text = f"saved {written} country rows"

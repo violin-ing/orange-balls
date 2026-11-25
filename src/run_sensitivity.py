@@ -53,6 +53,7 @@ from src.score.drivers import (
     load_criterion_texts,
     select_drivers,
 )
+from src.score.names import CRITERION_NAMES
 from src.score.run import ScoreResult, load_score_inputs, score_countries
 from src.score.sensitivity import weights_monte_carlo
 from src.score.settings import EQUAL_FIFTHS, Settings, geometric_variant
@@ -62,20 +63,6 @@ OUTPUT_DIR = Path("data/processed")
 
 # Number of countries to display
 SHOW = 15
-
-# Readable names for the criteria in the printed tables
-CRITERION_NAMES = {
-    "wgi_ge": "Government effectiveness",
-    "wgi_pv": "Political stability",
-    "v2mecenefm": "Media censorship",
-    "v2meharjrn": "Harassment of journalists",
-    "v2smgovshutcap": "Internet shutdown capacity",
-    "v2smgovdom": "Government disinformation",
-    "unrest": "Domestic unrest",
-    "media_pressure": "Pressure on media",
-    "intl_conflict": "International conflict",
-    "intl_coop": "International cooperation",
-}
 
 
 def indent(text: str) -> str:

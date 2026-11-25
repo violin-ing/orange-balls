@@ -1,0 +1,7 @@
+band,label,description,status
+0,Too little contact,"Too few events between the two countries in the last 90 days to judge the relationship",draft
+1,Conflictual,"Conflict dominates recent contact between the two countries",draft
+2,Tense,"Recent contact is more conflictual than for most pairs of countries",draft
+3,Mixed,"A typical mix of cooperation and conflict",draft
+4,Cooperative,"Recent contact is mostly cooperative",draft
+5,Very cooperative,"Recent contact is almost entirely cooperative",draft

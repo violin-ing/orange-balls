@@ -65,8 +65,10 @@ from datetime import UTC, date, datetime
 import numpy as np
 import pandas as pd
 
-from src.reference.variables import VARIABLES
+from src.reference.variables import VARIABLES, with_role
 from src.score.fast import (
+    FAST_CRITERIA,
+    LEVEL_CRITERIA,
     TIERS_PATH,
     FastInputs,
     InsufficientHistory,
@@ -121,7 +123,12 @@ def score_variant(settings: Settings) -> str:
     part of it: each percentile is stored as its own row.
     """
     described = {name: getattr(settings, name) for name in SCORE_SETTINGS}
-    described["criteria"] = list(settings.criteria)
+
+    # The criteria actually scored: an empty settings.criteria means "the
+    # default set", which changes when a criterion is added, and stored cut
+    # points must not be reused for a different set
+    described["criteria"] = (list(settings.criteria) if settings.criteria
+                             else list(FAST_CRITERIA) + with_role("criterion"))
     described["weights"] = sorted(settings.weights.items())
     described["fast"] = fast_variant(settings)
 
@@ -215,7 +222,11 @@ def fast_bounds(
     ) -> pd.DataFrame:
     """
     Bounds for the GDELT criteria from their country-day values over the
-    reference period: Starts from 0 up to the cap_percentile-th percentile.
+    reference period: from 0 up to the cap_percentile-th percentile
+    ("percentile_cap"). Level criteria (relations) are shares that never
+    come near 0, so they run from the (100 - cap_percentile)-th to the
+    cap_percentile-th percentile instead ("percentile_range"); otherwise
+    all countries would sit in the top part of the scale.
     """
     variant = fast_variant(settings)
     start, end = str(values["date"].min()), str(values["date"].max())
@@ -223,12 +234,15 @@ def fast_bounds(
 
     for criterion, group in values.groupby("criterion"):
         x = group["value"].to_numpy(dtype=float)
+        level = criterion in LEVEL_CRITERIA
+        lower = (float(np.percentile(x, 100 - settings.cap_percentile))
+                 if level else 0.0)
         rows.append({
             "criterion": criterion, "variant": variant,
-            "lower": 0.0,
+            "lower": lower,
             "upper": float(np.percentile(x, settings.cap_percentile)),
             "mean": float(x.mean()), "sd": float(x.std(ddof=1)),
-            "method": "percentile_cap",
+            "method": "percentile_range" if level else "percentile_cap",
             "reference_start": start, "reference_end": end,
             "computed_at": _now(),
         })

@@ -59,6 +59,7 @@ from src.score.bounds import (
     fast_bounds,
     fast_reference_values,
     fast_variant,
+    score_variant,
     slow_bounds,
 )
 from src.score.combine import MissingBounds, aggregate, normalise
@@ -71,7 +72,12 @@ from src.score.fast import (
     load_tiers,
     tier_weights,
 )
-from src.score.run import ScoreInputs, reference_scores, score_countries
+from src.score.run import (
+    ScoreInputs,
+    chosen_criteria,
+    reference_scores,
+    score_countries,
+)
 from src.score.settings import InvalidSettings, Settings
 from src.store.database import BOUNDS_COLUMNS
 
@@ -264,6 +270,10 @@ def make_inputs(
             
             rows.append((iso3, d, "media_pressure", media_k, n))
 
+            # relations: about two thirds of international events are
+            # cooperative, every day
+            rows.append((iso3, d, "relations", 2 * n // 3, n))
+
     counts = pd.DataFrame(rows, columns=["iso3", "date", "criterion", "k",
                                          "n"])
     
@@ -286,6 +296,23 @@ def test_zero_baseline_still_gives_a_defined_value() -> None:
     # No events today and none before: about "normal", with a wide band
     assert abs(small["value"] - 1.0) < 0.01
     assert 0.9 < small["se"] < 1.1
+
+
+def test_relations_is_a_level_compared_across_countries() -> None:
+    """
+    relations is the smoothed cooperative share over the last baseline_days
+    days including today, not a deviation from the country's normal.
+    """
+    result = fast_criteria(make_inputs(), DAY, Settings())
+    big = get(result, "BIG", "relations")
+
+    assert big["method"] == "share"
+    assert big["n_window"] == 3000 * 90  # 90 days up to and including today
+    assert abs(big["value"] - 2 / 3) < 0.001
+
+    # a small country is pulled towards the all-country share
+    small = get(result, "SMALL", "relations")
+    assert small["se"] > big["se"]
 
 
 def test_zero_expected_without_smoothing_is_refused() -> None:
@@ -599,6 +626,24 @@ def test_fast_bounds_cap_at_a_percentile() -> None:
     assert (row["lower"], row["upper"]) == (0.0, 90.0)
     assert row["variant"] == fast_variant(Settings())
 
+    # relations is a level, so it runs between two percentiles
+    relations = fast_bounds(values.assign(criterion="relations"),
+                            Settings(cap_percentile=90)).iloc[0]
+    assert (relations["lower"], relations["upper"]) == (10.0, 90.0)
+    assert relations["method"] == "percentile_range"
+
+
+def test_the_score_variant_names_the_default_criteria() -> None:
+    # An empty criteria setting means the default set; naming that set
+    # explicitly scores the same way, so it must share cut points
+    default = Settings()
+    named = Settings(criteria=tuple(chosen_criteria(default)))
+    assert score_variant(default) == score_variant(named)
+
+    # leaving a criterion out is a different variant
+    fewer = Settings(criteria=tuple(chosen_criteria(default)[:-1]))
+    assert score_variant(default) != score_variant(fewer)
+
 
 def test_reference_days_without_history_are_skipped() -> None:
     inputs = make_inputs(days=100)
@@ -663,9 +708,10 @@ def test_a_whole_run_scores_every_country() -> None:
     assert result.reference_year == DAY.year - 1
     assert list(result.values.columns) == list(FAST_CRITERIA) + SLOW
     assert sorted(result.scores.index) == ["BIG", "MID", "SMALL"]
-    # ten criteria: four GDELT and six structural
-    assert len(FAST_CRITERIA) + len(SLOW) == 10
-    assert (result.scores["n_criteria"] == 10).all()
+    # eleven criteria: five GDELT (relations added 25 November 2026,
+    # decision log 28) and six structural
+    assert len(FAST_CRITERIA) + len(SLOW) == 11
+    assert (result.scores["n_criteria"] == 11).all()
     assert np.isfinite(result.scores[["score", "score_se"]]).all().all()
 
     # every country gets an internal band, with a range around it
@@ -745,6 +791,7 @@ def main() -> None:
         test_a_table_without_is_root_is_refused,
         test_tiers_use_the_longest_matching_prefix,
         test_zero_baseline_still_gives_a_defined_value,
+        test_relations_is_a_level_compared_across_countries,
         test_zero_expected_without_smoothing_is_refused,
         test_few_events_mean_a_wider_band,
         test_one_unusual_event_in_a_small_country_is_damped,
@@ -767,6 +814,7 @@ def main() -> None:
         test_fast_variant_follows_the_settings_that_change_values,
         test_slow_bounds_use_the_scale_or_the_reference_range,
         test_fast_bounds_cap_at_a_percentile,
+        test_the_score_variant_names_the_default_criteria,
         test_reference_days_without_history_are_skipped,
         test_a_whole_run_scores_every_country,
         test_a_run_can_score_the_structural_criteria_only,

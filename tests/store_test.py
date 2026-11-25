@@ -29,6 +29,7 @@ from src.store.database import (
     load_country_day,
     load_event_codes,
     load_manifest,
+    load_pair_day,
     load_pull_log,
     save_bounds,
     save_day,
@@ -70,7 +71,7 @@ def test_tables_are_created() -> None:
     assert names == {
         "country_day", "event_code_day", "pull_log",
         "reference", "reference_file", "norm_bounds", "band_cuts",
-        "gdelt_file",
+        "gdelt_file", "pair_day",
     }, names
 
     connection.close()
@@ -325,6 +326,38 @@ def test_a_bad_manifest_is_refused() -> None:
     connection.close()
 
 
+def make_pairs(day: date) -> pd.DataFrame:
+    return pd.DataFrame({
+        "date": pd.Timestamp(day), "actor1": ["USA", "RUS"],
+        "actor2": ["GBR", "UKR"], "n_events": [5, 9], "n_coop": [4, 1],
+        "n_conflict": [1, 8], "n_material_conflict": [0, 6],
+    })
+
+
+def test_pairs_are_saved_and_replaced_with_the_day() -> None:
+    connection = connect(":memory:")
+
+    save_day(connection, make_day(DAY_1), DAY_1, 96, 96,
+             pairs=make_pairs(DAY_1))
+    save_day(connection, make_day(DAY_2), DAY_2, 96, 96,
+             pairs=make_pairs(DAY_2).head(1))
+    loaded = load_pair_day(connection)
+
+    assert len(loaded) == 3
+    rus = loaded[loaded["actor1"] == "RUS"].iloc[0]
+    assert (rus["actor2"], rus["n_conflict"]) == ("UKR", 8)
+    assert len(load_pair_day(connection, start=DAY_2)) == 1
+
+    # Saving a day again without pairs keeps them; with pairs replaces them
+    save_day(connection, make_day(DAY_1), DAY_1, 96, 96)
+    assert len(load_pair_day(connection, end=DAY_1)) == 2
+    save_day(connection, make_day(DAY_1), DAY_1, 96, 96,
+             pairs=make_pairs(DAY_1).head(1))
+    assert len(load_pair_day(connection, end=DAY_1)) == 1
+
+    connection.close()
+
+
 def test_event_codes_from_another_day_are_refused() -> None:
     connection = connect(":memory:")
 
@@ -420,6 +453,8 @@ def check_real_database() -> None:
     log = load_pull_log(connection)
     table = load_country_day(connection)
     codes = load_event_codes(connection)
+    manifest = load_manifest(connection)
+    pairs = load_pair_day(connection)
     connection.close()
 
     print(f"database: {DB_PATH} ({DB_PATH.stat().st_size / 1024:.0f} KB)")
@@ -454,7 +489,6 @@ def check_real_database() -> None:
     # The file manifest: every stored day should have one (decision log
     # 18.1). Days pulled before it existed need
     # python -m src.pull_day --from ... --to ... --manifest-only
-    manifest = load_manifest(connection)
     recorded = set(manifest["date"])
     missing = sorted(set(log["date"]) - recorded)
     print(f"\nfile manifest: {len(manifest):,} files for {len(recorded)} "
@@ -462,6 +496,15 @@ def check_real_database() -> None:
     if missing:
         print(f"WARNING: {len(missing)} stored days have no manifest "
               f"({missing[0]} to {missing[-1]})")
+
+    # The country-pair table (Bilateral View): days pulled before it
+    # existed need python -m src.pull_day --from ... --to ... --force
+    pair_days = set(pairs["date"].dt.strftime("%Y-%m-%d"))
+    no_pairs = sorted(set(log["date"]) - pair_days)
+    print(f"pair table: {len(pairs):,} rows for {len(pair_days)} days")
+    if no_pairs:
+        print(f"WARNING: {len(no_pairs)} stored days have no pair rows "
+              f"({no_pairs[0]} to {no_pairs[-1]})")
 
     print("\nREAL DATABASE CHECK OK")
 
@@ -492,6 +535,7 @@ def main() -> None:
         test_the_manifest_is_saved_with_the_day,
         test_the_manifest_is_replaced_per_day,
         test_a_bad_manifest_is_refused,
+        test_pairs_are_saved_and_replaced_with_the_day,
         test_bounds_are_saved_and_replaced_per_variant,
         test_database_from_older_code_is_refused,
     ]

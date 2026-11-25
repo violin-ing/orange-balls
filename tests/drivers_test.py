@@ -6,8 +6,8 @@ Tests for src/score/drivers.py. Run from the repository root:
 The tests use small, made-up countries, never the real database.
 
 They cover:
-    1. The criterion text table: the shipped file has one text for each of
-       the ten criteria, and broken tables are refused.
+    1. The criterion text table: the shipped file has one text for each
+       criterion, and broken tables are refused.
     2. Driver selection: the weakest criteria are named weakest first, at
        most driver_count of them, only when notably below average, and never
        a criterion on which every country is the same.
@@ -41,9 +41,9 @@ def expect_error(error_type, function, *args) -> None:
 
 # === CRITERION TEXTS ===
 
-def test_the_shipped_texts_cover_all_ten_criteria() -> None:
+def test_the_shipped_texts_cover_every_criterion() -> None:
     criteria = chosen_criteria(Settings())
-    assert len(criteria) == 10
+    assert len(criteria) == 11
 
     shipped = check_criterion_texts(load_criterion_texts(), criteria)
     assert set(shipped["criterion"]) == set(criteria)
@@ -149,7 +149,7 @@ def test_compose_gives_the_band_then_one_line_per_driver() -> None:
 def main() -> None:
     argparse.ArgumentParser().parse_args()
     tests = [
-        test_the_shipped_texts_cover_all_ten_criteria,
+        test_the_shipped_texts_cover_every_criterion,
         test_broken_text_tables_are_refused,
         test_the_weakest_criteria_are_named_weakest_first,
         test_an_average_country_gets_no_driver,

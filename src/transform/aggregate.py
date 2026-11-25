@@ -4,12 +4,15 @@ Turns raw GDELT event records into daily summary tables for each country.
 The input is an event table from read_events() or read_day(), with one
 row per event.
 
-The module produces two output tables:
+The module produces three output tables:
     - to_country_day(): one row per country per day, containing event
       totals and the measurements needed by the scoring criteria.
     - to_event_code_day(): one row per country, day, event code,
       relationship, media-target status and lead-paragraph status,
       preserving the full CAMEO event code detail.
+    - to_pair_day(): one row per day and ordered pair of countries (actor 1,
+      actor 2), counting their cooperative and conflictual events, for the
+      Bilateral View.
 
 This module only counts events and adds up measurements. It does not
 calculate percentages, weights, scores or overall levels. Those
@@ -136,6 +139,15 @@ EVENT_CODE_COLUMNS: list[str] = [
     "iso3", "date", "event_code", "relation", "media_target", "is_root",
     "n_events", "n_articles", "goldstein_sum",
 ]
+
+# Columns in the country-pair output table
+PAIR_COLUMNS: list[str] = [
+    "date", "actor1", "actor2", "n_events", "n_coop", "n_conflict",
+    "n_material_conflict",
+]
+
+# QuadClass 4 = material conflict (fighting, assault, coercion)
+MATERIAL_CONFLICT_QUAD_CLASS = 4
 
 
 def criterion_columns() -> list[str]:
@@ -510,3 +522,45 @@ def to_event_code_day(events: pd.DataFrame) -> pd.DataFrame:
     table = table[EVENT_CODE_COLUMNS]
 
     return table.sort_values(keys, ignore_index=True)
+
+
+def to_pair_day(events: pd.DataFrame) -> pd.DataFrame:
+    """
+    Count events between two different countries, for each day and ordered
+    pair (actor 1 acting on actor 2), for the Bilateral View.
+
+    Columns (PAIR_COLUMNS):
+        n_events             all events between the pair
+        n_coop               cooperative (QuadClass 1 and 2)
+        n_conflict           conflictual (QuadClass 3 and 4)
+        n_material_conflict  material conflict only (QuadClass 4)
+
+    The pair is directed: Russia acting on Ukraine is a different row from
+    Ukraine acting on Russia, so either reading can be built later (decision
+    log 25.6). Only events where both actors are countries, and different
+    countries, are counted; where the event happened does not matter.
+    Intergovernmental organisations are not countries, so their events are
+    left out here (they still count in the country-day table).
+    """
+    work = _prepare(events).work
+
+    between = (
+        work["actor1"].notna() & work["actor2"].notna()
+        & (work["actor1"] != work["actor2"]).fillna(False)
+    )
+    pairs = work[between].copy()
+
+    quad = pairs["QuadClass"]
+    pairs["n_events"] = 1
+    pairs["n_coop"] = quad.isin(COOPERATION_QUAD_CLASSES).astype("int64")
+    pairs["n_conflict"] = quad.isin(CONFLICT_QUAD_CLASSES).astype("int64")
+    pairs["n_material_conflict"] = (
+        quad == MATERIAL_CONFLICT_QUAD_CLASS
+    ).astype("int64")
+
+    keys = ["date", "actor1", "actor2"]
+    counts = ["n_events", "n_coop", "n_conflict", "n_material_conflict"]
+    table = pairs.groupby(keys)[counts].sum().reset_index()
+    table[counts] = table[counts].astype("int64")
+
+    return table[PAIR_COLUMNS].sort_values(keys, ignore_index=True)

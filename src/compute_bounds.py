@@ -22,7 +22,7 @@ It calculates limits for two types of indicators:
 
     2. GDELT indicators
 
-       Calculates the four GDELT scores for each country and
+       Calculates the five GDELT scores for each country and
        assessment date in the selected period.
 
        Days without enough historical data are skipped.
@@ -38,6 +38,14 @@ It calculates limits for two types of indicators:
        comparison run, and the same two sets for the geometric variant.
        Prints how many countries each split puts in each band on the
        last reference day.
+
+    4. Relation band cut points (Bilateral View, decision log 28)
+
+       Scores every pair of countries with enough contact on every
+       reference day (src/score/pairs.py), and takes the same percentiles
+       of those pair scores as the cut points between relation bands 1
+       (most conflictual) to 5. Skipped if no pair data is stored yet (pull
+       the days again with src.pull_day --force to build it).
 
 The calculated limits and cut points are saved in the database, replacing
 previous ones for the same indicators and settings. They are then frozen:
@@ -83,13 +91,15 @@ from src.score.bounds import (
     fast_variant,
     slow_bounds,
 )
-from src.score.fast import load_fast_inputs
+from src.score.fast import InsufficientHistory, load_fast_inputs
+from src.score.pairs import pair_cut_rows, pair_reference_values
 from src.score.run import ScoreInputs, reference_scores
 from src.score.settings import EQUAL_FIFTHS, Settings, geometric_variant
 from src.store.database import (
     DB_PATH,
     connect,
     load_bounds,
+    load_pair_day,
     load_pull_log,
     load_reference,
     save_band_cuts,
@@ -238,6 +248,42 @@ def main() -> None:
                       + "  ".join(f"{float(c):.3f}" for c in cuts))
                 print(f"       countries per band on "
                       f"{last_day['date'].max()}: "
+                      + " | ".join(f"band {b}: {n}"
+                                   for b, n in counts.items()))
+
+
+        # === 4. Relation band cut points (Bilateral View) ===
+
+        print("\n4. Relation band cut points (pairs of countries)")
+
+        window_start = days[0] - pd.Timedelta(days=settings.baseline_days)
+        pair_day = load_pair_day(connection, window_start, days[-1])
+
+        if pair_day.empty:
+            print("   no pair data stored yet: pull the days again with "
+                  "python -m src.pull_day --from ... --to ... --force")
+        else:
+            try:
+                values, skipped_pairs = pair_reference_values(
+                    pair_day, days, settings, complete)
+            except InsufficientHistory as error:
+                print(f"   skipped: {error}")
+            else:
+                rows = pair_cut_rows(values, settings)
+                save_band_cuts(connection, rows)
+
+                last = values[values["date"] == values["date"].max()]
+                counts = pd.Series(band_of(last["value"],
+                                           rows["value"].to_numpy())) \
+                    .value_counts().reindex(range(1, len(rows) + 2),
+                                            fill_value=0)
+
+                print(f"   {values['date'].nunique()} days "
+                      f"({len(skipped_pairs)} skipped), "
+                      f"{len(values):,} pair-day scores with enough contact")
+                print("   cut points       "
+                      + "  ".join(f"{float(c):.3f}" for c in rows["value"]))
+                print(f"   pairs per band on {last['date'].max()}: "
                       + " | ".join(f"band {b}: {n}"
                                    for b, n in counts.items()))
 
