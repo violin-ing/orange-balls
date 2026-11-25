@@ -196,6 +196,13 @@ def test_the_shipped_description_table_is_valid() -> None:
     assert (shipped["status"] == "draft").all()
 
 
+def test_the_shipped_public_scale_has_three_bands_grouped_1_2_2() -> None:
+    # Decision log 21.1: Severe = 1, Elevated = 2-3, Routine = 4-5
+    shipped = check_descriptions(load_descriptions(), Settings().bands)
+    found = public_band(pd.Series([1, 2, 3, 4, 5]), shipped).tolist()
+    assert found == [1, 2, 2, 3, 3]
+
+
 def test_fewer_public_bands_than_internal_ones_are_allowed() -> None:
     three = check_descriptions(table([(1, "1;2"), (2, "3"), (3, "4;5")]),
                                5)
@@ -337,6 +344,7 @@ def main() -> None:
         test_band_range_comes_from_the_standard_error,
         test_zscores_get_no_band_without_cut_points,
         test_the_shipped_description_table_is_valid,
+        test_the_shipped_public_scale_has_three_bands_grouped_1_2_2,
         test_fewer_public_bands_than_internal_ones_are_allowed,
         test_broken_description_tables_are_refused,
         test_describe_gives_each_audience_its_own_wording,

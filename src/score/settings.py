@@ -141,6 +141,18 @@ class Settings:
     band_cuts: tuple[float, ...] = ()
 
 
+    # --- Per-country drivers (src/score/drivers.py, decision log 24.4) ---
+
+    # How many of a country's weakest criteria to name at most
+    driver_count: int = 2
+
+    # A criterion is named only if the country is at least this many
+    # standard deviations below the average of all scored countries on
+    # that criterion, so a country with no notably weak criterion gets none
+    # named. Proposed default, for review
+    driver_floor_sd: float = 0.5
+
+
     # --- Reference data ---
 
     reference_lag_years: int = 1
@@ -199,6 +211,11 @@ class Settings:
               "weights must all be positive")
         
         check(self.bands >= 2, "bands must be at least 2")
+
+        check(self.driver_count >= 0, "driver_count cannot be negative")
+
+        check(self.driver_floor_sd >= 0,
+              "driver_floor_sd cannot be negative")
 
         check(self.band_method in BAND_METHODS,
               f"band_method must be one of {BAND_METHODS}")

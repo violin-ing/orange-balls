@@ -1,0 +1,11 @@
+criterion,audience,label,text,status
+wgi_ge,internal,Limited administrative capacity,"National authorities may be slow to organise a coordinated public response",draft
+wgi_pv,internal,Unsettled political situation,"An announcement may be drawn into existing political tensions or meet public disorder",draft
+v2mecenefm,internal,Limited independent media reach,"News of an announcement may reach the public late, in part, or reframed by domestic media",draft
+v2meharjrn,internal,Constrained reporting,"Journalists may be reluctant to question or explain an announcement freely, so independent explanation will be scarce",draft
+v2smgovshutcap,internal,Online access can be restricted,"Online access to information about an announcement could be limited at short notice",draft
+v2smgovdom,internal,Lower trust in official statements,"Official statements are less likely to be taken at face value",draft
+unrest,internal,Unrest above its usual level,"An announcement would compete with, or could add to, current domestic unrest",draft
+media_pressure,internal,Recent pressure on the media,"Media outlets may be cautious about how they report an announcement",draft
+intl_conflict,internal,International tension above its usual level,"An announcement may be read through the lens of current international tensions",draft
+intl_coop,internal,International contact below its usual level,"Coordinating with international bodies may take longer than usual",draft

@@ -5,7 +5,7 @@ SQLite database.
 SQLite stores the database in a single file and is included with Python, so no
 separate database software is needed.
 
-The database contains six tables:
+The database contains eight tables:
     
     1. country_day: daily totals and measurements for each country
     
@@ -25,6 +25,13 @@ The database contains six tables:
 
     7. band_cuts: the frozen cut points between bands, one row per score
         settings variant and percentile (decision log 14.1)
+
+    8. gdelt_file: the manifest of GDELT files behind each stored day: the
+        file's address, GDELT's published MD5 checksum, its size and whether
+        it was read. This is what makes the download cache replaceable: any
+        file can be fetched again from GDELT and checked against its MD5, so
+        the cache can be deleted at the end of the project (decision log
+        18.1, 26.1). It lives in this database, not in the cache folder.
 
 Important details:
     - Saving a day replaces any existing data for that day, rather than
@@ -112,6 +119,11 @@ BOUNDS_COLUMNS: list[str] = [
 BAND_CUT_COLUMNS: list[str] = [
     "variant", "percentile", "value", "reference_start", "reference_end",
     "computed_at",
+]
+
+# One row per GDELT file: the file list and checksums behind each day
+MANIFEST_COLUMNS: list[str] = [
+    "date", "url", "md5", "size_bytes", "read_ok",
 ]
 
 
@@ -236,6 +248,17 @@ def connect(path: Path | str = DB_PATH) -> sqlite3.Connection:
         )
     """)
 
+    # Create gdelt_file (the file manifest)
+    connection.execute("""
+        CREATE TABLE IF NOT EXISTS gdelt_file (
+            date TEXT NOT NULL,
+            url TEXT PRIMARY KEY,
+            md5 TEXT NOT NULL,
+            size_bytes INTEGER NOT NULL,
+            read_ok INTEGER NOT NULL
+        )
+    """)
+
     connection.commit()
 
     # Check for outdated columns
@@ -247,6 +270,7 @@ def connect(path: Path | str = DB_PATH) -> sqlite3.Connection:
         "reference_file": REFERENCE_FILE_COLUMNS,
         "norm_bounds": BOUNDS_COLUMNS,
         "band_cuts": BAND_CUT_COLUMNS,
+        "gdelt_file": MANIFEST_COLUMNS,
     }
     for table_name, columns in expected.items():
         found = [
@@ -292,13 +316,15 @@ def save_day(
         files_listed: int,
         files_read: int,
         codes: pd.DataFrame | None = None,
+        manifest: pd.DataFrame | None = None,
     ) -> int:
     """
-    Store one day's country-day table, its event code table and its pull
-    record.
+    Store one day's country-day table, its event code table, its pull
+    record and, if given, its file manifest (MANIFEST_COLUMNS).
 
     If the day exists, its old rows are removed first. If codes is None, 
-    the day's event code rows are removed and none are written.
+    the day's event code rows are removed and none are written. If manifest
+    is None, the day's stored manifest is left as it is.
 
     Returns the number of country rows written.
     """
@@ -337,6 +363,9 @@ def save_day(
     if codes is not None:
         _check_one_day(codes, day_text, "event code table")
         code_rows = _plain_rows(codes, pd.Series(day_text, index=codes.index))
+
+    if manifest is not None:
+        _check_manifest(manifest, day_text)
 
     log_row = (
         day_text,
@@ -384,7 +413,93 @@ def save_day(
             log_row,
         )
 
+        if manifest is not None:
+            _write_manifest(connection, manifest, day_text)
+
     return len(rows)
+
+
+def _check_manifest(manifest: pd.DataFrame, day_text: str) -> None:
+    """
+    Refuse a manifest with the wrong columns or rows for another day.
+    """
+    if list(manifest.columns) != MANIFEST_COLUMNS:
+        raise ValueError(
+            f"Manifest columns should be {MANIFEST_COLUMNS}, "
+            f"got {list(manifest.columns)}"
+        )
+
+    other = set(manifest["date"].astype(str)) - {day_text}
+    if other:
+        raise ValueError(
+            f"Manifest for {day_text} holds rows for other dates: "
+            f"{sorted(other)}"
+        )
+
+
+def _write_manifest(
+        connection: sqlite3.Connection,
+        manifest: pd.DataFrame,
+        day_text: str,
+    ) -> None:
+    """
+    Replace one day's manifest rows. Call inside a transaction.
+    """
+    connection.execute("DELETE FROM gdelt_file WHERE date = ?", (day_text,))
+
+    rows = manifest.astype(object).where(manifest.notna(), None)
+    rows["read_ok"] = [int(bool(x)) for x in manifest["read_ok"]]
+
+    connection.executemany(
+        f"INSERT OR REPLACE INTO gdelt_file ({', '.join(MANIFEST_COLUMNS)}) "
+        f"VALUES ({', '.join('?' for _ in MANIFEST_COLUMNS)})",
+        rows.itertuples(index=False, name=None),
+    )
+
+
+def save_manifest(
+        connection: sqlite3.Connection,
+        day: date,
+        manifest: pd.DataFrame,
+    ) -> int:
+    """
+    Store one day's file manifest on its own, replacing any stored rows for
+    that day. Used to record the manifest of days pulled before the manifest
+    existed (python -m src.pull_day --manifest-only).
+    """
+    day_text = day.isoformat()
+    _check_manifest(manifest, day_text)
+
+    with connection:
+        _write_manifest(connection, manifest, day_text)
+
+    return len(manifest)
+
+
+def load_manifest(
+        connection: sqlite3.Connection,
+        start: date | None = None,
+        end: date | None = None,
+    ) -> pd.DataFrame:
+    """
+    The stored file manifest, optionally for a date range only (both ends
+    included).
+    """
+    conditions, values = [], []
+    if start is not None:
+        conditions.append("date >= ?")
+        values.append(start.isoformat())
+    if end is not None:
+        conditions.append("date <= ?")
+        values.append(end.isoformat())
+
+    where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
+    query = (
+        f"SELECT {', '.join(MANIFEST_COLUMNS)} FROM gdelt_file {where} "
+        "ORDER BY date, url"
+    )
+
+    return pd.read_sql_query(query, connection, params=values)
 
 
 def _where(

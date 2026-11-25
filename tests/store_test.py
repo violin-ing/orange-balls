@@ -21,15 +21,18 @@ import pandas as pd
 from src.store.database import (
     BOUNDS_COLUMNS,
     DB_PATH,
+    MANIFEST_COLUMNS,
     TABLE_COLUMNS,
     SchemaMismatch,
     connect,
     load_bounds,
     load_country_day,
     load_event_codes,
+    load_manifest,
     load_pull_log,
     save_bounds,
     save_day,
+    save_manifest,
 )
 from src.transform.aggregate import to_country_day, to_event_code_day
 from tests.aggregate_test import make_events
@@ -67,6 +70,7 @@ def test_tables_are_created() -> None:
     assert names == {
         "country_day", "event_code_day", "pull_log",
         "reference", "reference_file", "norm_bounds", "band_cuts",
+        "gdelt_file",
     }, names
 
     connection.close()
@@ -247,6 +251,80 @@ def test_event_codes_are_saved_and_replaced() -> None:
     connection.close()
 
 
+def make_manifest(day: date, files: int = 3) -> pd.DataFrame:
+    """
+    A made-up file manifest for one day; the last file was not read.
+    """
+    stamp = day.strftime("%Y%m%d")
+    return pd.DataFrame(
+        [
+            (day.isoformat(),
+             f"http://data.gdeltproject.org/gdeltv2/{stamp}{i:02d}"
+             "1500.export.CSV.zip",
+             f"md5-{stamp}-{i}", 1000 + i, i < files - 1)
+            for i in range(files)
+        ],
+        columns=MANIFEST_COLUMNS,
+    )
+
+
+def test_the_manifest_is_saved_with_the_day() -> None:
+    connection = connect(":memory:")
+
+    save_day(connection, make_day(DAY_1), DAY_1, 3, 2,
+             manifest=make_manifest(DAY_1))
+    loaded = load_manifest(connection)
+
+    assert len(loaded) == 3
+    assert loaded["read_ok"].tolist() == [1, 1, 0]
+    assert loaded["md5"].iloc[0] == "md5-20261005-0"
+    assert loaded["size_bytes"].tolist() == [1000, 1001, 1002]
+
+    # Saving the day again without a manifest keeps the stored one
+    save_day(connection, make_day(DAY_1), DAY_1, 3, 2)
+    assert len(load_manifest(connection)) == 3
+
+    connection.close()
+
+
+def test_the_manifest_is_replaced_per_day() -> None:
+    connection = connect(":memory:")
+
+    save_manifest(connection, DAY_1, make_manifest(DAY_1, files=3))
+    save_manifest(connection, DAY_2, make_manifest(DAY_2, files=2))
+    save_manifest(connection, DAY_1, make_manifest(DAY_1, files=4))
+
+    assert len(load_manifest(connection)) == 6
+    assert len(load_manifest(connection, start=DAY_1, end=DAY_1)) == 4
+    assert len(load_manifest(connection, start=DAY_2)) == 2
+
+    connection.close()
+
+
+def test_a_bad_manifest_is_refused() -> None:
+    connection = connect(":memory:")
+
+    for bad in (make_manifest(DAY_2),
+                make_manifest(DAY_1).drop(columns="md5")):
+        try:
+            save_manifest(connection, DAY_1, bad)
+        except ValueError:
+            continue
+        raise AssertionError("a bad manifest should be refused")
+
+    # A refused manifest also stops the day from being saved
+    try:
+        save_day(connection, make_day(DAY_1), DAY_1, 3, 3,
+                 manifest=make_manifest(DAY_2))
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("a manifest for another day should be refused")
+
+    assert load_pull_log(connection).empty
+    connection.close()
+
+
 def test_event_codes_from_another_day_are_refused() -> None:
     connection = connect(":memory:")
 
@@ -373,6 +451,18 @@ def check_real_database() -> None:
         "event code rows do not match the pull log"
     )
 
+    # The file manifest: every stored day should have one (decision log
+    # 18.1). Days pulled before it existed need
+    # python -m src.pull_day --from ... --to ... --manifest-only
+    manifest = load_manifest(connection)
+    recorded = set(manifest["date"])
+    missing = sorted(set(log["date"]) - recorded)
+    print(f"\nfile manifest: {len(manifest):,} files for {len(recorded)} "
+          f"days, {int(manifest['read_ok'].sum()):,} read")
+    if missing:
+        print(f"WARNING: {len(missing)} stored days have no manifest "
+              f"({missing[0]} to {missing[-1]})")
+
     print("\nREAL DATABASE CHECK OK")
 
 
@@ -399,6 +489,9 @@ def main() -> None:
         test_database_refuses_duplicate_country_day,
         test_event_codes_are_saved_and_replaced,
         test_event_codes_from_another_day_are_refused,
+        test_the_manifest_is_saved_with_the_day,
+        test_the_manifest_is_replaced_per_day,
+        test_a_bad_manifest_is_refused,
         test_bounds_are_saved_and_replaced_per_variant,
         test_database_from_older_code_is_refused,
     ]

@@ -46,6 +46,13 @@ from pathlib import Path
 
 import pandas as pd
 
+from src.score.bands import check_descriptions, describe, load_descriptions
+from src.score.drivers import (
+    check_criterion_texts,
+    compose,
+    load_criterion_texts,
+    select_drivers,
+)
 from src.score.run import ScoreResult, load_score_inputs, score_countries
 from src.score.sensitivity import weights_monte_carlo
 from src.score.settings import EQUAL_FIFTHS, Settings, geometric_variant
@@ -75,9 +82,11 @@ def indent(text: str) -> str:
     return textwrap.indent(text, "   ")
 
 
-def show_country(result: ScoreResult, iso3: str) -> None:
+def show_country(result: ScoreResult, iso3: str, settings: Settings) -> None:
     """
-    Print one country's criteria (raw and on the 0-1 scale), score and band.
+    Print one country's criteria (raw and on the 0-1 scale), score and band,
+    then the text a planner would read: the band's description and one line
+    for each of its weakest criteria (decision log 24.4).
     """
     print(f"\n2. Breakdown for {iso3}")
 
@@ -105,6 +114,29 @@ def show_country(result: ScoreResult, iso3: str) -> None:
     span = f"band {low} only" if low == high else f"bands {low}-{high}"
     print(f"\n   score {row['score']:.3f} +/- {1.96 * row['score_se']:.3f}"
           f"  ->  band {int(row['band'])} (range: {span})")
+
+    # What a planner reads: band description + one line per weak criterion
+    scored = result.norm.dropna()
+    drivers = select_drivers(scored, settings)
+    texts = check_criterion_texts(load_criterion_texts(),
+                                  list(scored.columns))
+    bands = check_descriptions(load_descriptions(), settings.bands)
+    band_row = describe(result.scores.loc[[iso3]], bands).loc[iso3]
+
+    named = drivers[drivers["iso3"] == iso3]
+    if named.empty:
+        why = "no criterion is notably below average"
+    else:
+        why = ", ".join(
+            f"{CRITERION_NAMES.get(r.criterion, r.criterion)} "
+            f"({r.value:.2f} against an average of {r.average:.2f})"
+            for r in named.itertuples()
+        )
+    print(f"   main drivers: {why}")
+
+    print("\n   what a planner reads (draft wording):")
+    for line in compose(iso3, band_row, drivers, texts):
+        print(indent(textwrap.fill(line, 72, subsequent_indent="  ")))
 
 
 def main() -> None:
@@ -244,7 +276,7 @@ def main() -> None:
 
     # 6.2 One country in detail
     if args.country:
-        show_country(result, args.country)
+        show_country(result, args.country, settings)
 
     # 6.3 Weights sensitivity
     step = 3 if args.country else 2

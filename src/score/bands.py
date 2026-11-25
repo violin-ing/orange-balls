@@ -37,22 +37,29 @@ Turns country scores into bands, and bands into descriptions.
         internal_bands  the internal band(s) the row covers, e.g. "1" or "1;2";
                         for internal rows, the row's own band
         label           a short name
-        action          internal: what the responsible bodies do;
+        action          internal: what the announcing international body
+                        does (its user, decision log 24.1), and which
+                        national actors it works with;
                         public: the observable consequence of that action
         status          "draft" until the wording is agreed
 
     The public row is derived from the internal row(s) it covers, not written
     separately: it states the observable consequence of the internal action
-    (internal "coordinate with local law enforcement" becomes public "expect 
-    heightened law enforcement activity"). That cannot be checked by code, but
-    the structure can, so check_descriptions() requires:
+    (internal "brief national authorities early enough for them to prepare a
+    public-order response" becomes public "expect visible public-order
+    preparations"). That cannot be checked by code, but the structure can, so
+    check_descriptions() requires:
         - exactly one internal row per internal band;
         - public bands numbered 1, 2, ... with no gaps;
         - every internal band covered by exactly one public row, each public
             row covering a run of consecutive internal bands, in order. So 
             there may be fewer public bands than internal ones.
 
-        ^ Note: Yet to decide if the public scale should have fewer bands
+    The shipped table has five internal bands and three public ones, grouped
+    1 / 2-3 / 4-5 (Severe, Elevated, Routine; decision log 21.1): the rare
+    extreme keeps its own public level, as in the UK's mapping of five
+    threat levels onto three response levels. A public row must hold for
+    every internal band it covers.
 """
 
 from __future__ import annotations

@@ -541,10 +541,12 @@ ul.items {
   const BANDS = {
     1: { bg: '#9c3a12', fg: '#ffffff', name: 'Severe constraints',
          actions: ['Route notification through international bodies rather than national channels',
-                   'Coordinate with local law enforcement', 'Run active rumour management from first notice'] },
+                   'Brief national authorities early enough for them to prepare a public-order response',
+                   'Run active rumour management from first notice'] },
     2: { bg: '#e07b39', fg: INK, name: 'Significant constraints',
          actions: ['Notify national authorities and international bodies together',
-                   'Prepare rumour-management statements before announcement', 'Coordinate with local law enforcement'] },
+                   'Prepare rumour-management statements before announcement',
+                   'Brief national authorities early enough for them to prepare a public-order response'] },
     3: { bg: '#f3dcae', fg: INK, name: 'Moderate constraints',
          actions: ['Notify national authorities directly', 'Consult them on the timing of the announcement',
                    'Monitor for rumours and correct them as they arise'] },
@@ -571,6 +573,21 @@ ul.items {
     ['Domestic unrest', 1], ['Pressure on media', 1], ['International conflict', 1], ['International cooperation', 1]
   ];
 
+  // One text per criterion, in the order of CRITERIA (src/score/criterion_texts.csv).
+  // Phrased as consequences for the announcement, not as judgements of the government.
+  const CRITERION_TEXTS = [
+    ['Limited administrative capacity', 'National authorities may be slow to organise a coordinated public response'],
+    ['Unsettled political situation', 'An announcement may be drawn into existing political tensions or meet public disorder'],
+    ['Limited independent media reach', 'News of an announcement may reach the public late, in part, or reframed by domestic media'],
+    ['Constrained reporting', 'Journalists may be reluctant to question or explain an announcement freely, so independent explanation will be scarce'],
+    ['Online access can be restricted', 'Online access to information about an announcement could be limited at short notice'],
+    ['Lower trust in official statements', 'Official statements are less likely to be taken at face value'],
+    ['Unrest above its usual level', 'An announcement would compete with, or could add to, current domestic unrest'],
+    ['Recent pressure on the media', 'Media outlets may be cautious about how they report an announcement'],
+    ['International tension above its usual level', 'An announcement may be read through the lens of current international tensions'],
+    ['International contact below its usual level', 'Coordinating with international bodies may take longer than usual']
+  ];
+
   // Full names in place of the map data's abbreviations
   const FIX = {
     'eSwatini': 'Eswatini', 'Macedonia': 'North Macedonia', 'Turkey': 'Türkiye',
@@ -594,10 +611,13 @@ ul.items {
 
   const esc = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
   // Example scores for one country only (illustrative). In the real tool these
-  // come from the backend. vals are the ten criteria, in the order of CRITERIA.
+  // come from the backend. vals are the ten criteria, in the order of CRITERIA;
+  // drivers are the positions in CRITERIA of its weakest criteria, weakest
+  // first (src/score/drivers.py picks these).
   const EXAMPLE = {
     BRA: { score: 0.617, se: 0.014,
-           vals: [0.54, 0.50, 0.46, 0.41, 0.81, 0.77, 0.73, 0.69, 0.65, 0.61] }
+           vals: [0.54, 0.50, 0.46, 0.41, 0.81, 0.77, 0.73, 0.69, 0.65, 0.61],
+           drivers: [3, 2] }
   };
   const bandOf = (x) => { let b = 1; for (const c of CUTS) if (x >= c) b++; return b; };
   const pct = (x) => (Math.max(0, Math.min(1, x)) * 100).toFixed(1) + '%';
@@ -768,9 +788,14 @@ ul.items {
       document.getElementById('detail').innerHTML = html;
       return;
     }
+    if (t.drivers && t.drivers.length) {
+      html += '<div class="field"><span class="field-label">Main reasons</span><ul class="items">' +
+        t.drivers.map((k) => '<li><strong>' + esc(CRITERION_TEXTS[k][0]) + ':</strong> ' + esc(CRITERION_TEXTS[k][1]) + '</li>').join('') +
+        '</ul></div>';
+    }
     html += '<div class="field"><div class="score-row"><span class="field-label">Score and band range</span>' +
       '<span style="font-size:13px"><strong>' + t.score.toFixed(2) + '</strong> <span style="color:#5b6472">± ' + (1.96 * t.se).toFixed(2) +
-      ' · bands ' + (t.lo === t.hi ? t.lo + ' only' : t.lo + '–' + t.hi) + '</span></span></div>' +
+      (t.lo === t.hi ? ' · band ' + t.lo + ' only' : ' · bands ' + t.lo + '–' + t.hi) + '</span></span></div>' +
       '<div class="track-wrap"><div class="track">' +
       [1, 2, 3, 4, 5].map((b) => '<div style="background:' + BANDS[b].bg + ';width:' + pct(edges[b] - edges[b - 1]) + '"></div>').join('') +
       '</div><div class="whisker" style="left:' + pct(t.score - 1.96 * t.se) + ';width:' + pct(2 * 1.96 * t.se) + '"></div>' +

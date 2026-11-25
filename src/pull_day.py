@@ -9,24 +9,36 @@ Run from the project root:
     python3 -m src.pull_day --date 2026-10-09
     python3 -m src.pull_day --from 2026-10-01 --to 2026-10-09
     python3 -m src.pull_day --days 90
+    python3 -m src.pull_day --from 2026-05-14 --to 2026-11-10 --manifest-only
 
 Options:
-    --force    pull days again even if already stored
-    --no-save  print summaries without saving to the database
+    --force          pull days again even if already stored
+    --no-save        print summaries without saving to the database
+    --manifest-only  record the file manifest of days already pulled, from
+                     GDELT's index and the cache, without re-aggregating
 
 For each day, the script:
     1. Finds the available GDELT export files (96 for a full day)
     2. Downloads the files, skipping any that fail
     3. Reads and aggregates the events
     4. Prints a summary of the processed data
-    5. Saves the results, unless --no-save is used
+    5. Saves the results, unless --no-save is used, together with the day's
+       file manifest: every file's address, GDELT's published MD5 checksum,
+       its size and whether it was read (the gdelt_file table)
 
 Days already stored as complete are skipped unless --force is used
+
+The manifest is what allows the download cache to be deleted at the end of
+the project (decision log 18.1): every file can be fetched again from GDELT
+and checked against its recorded MD5. Run --manifest-only for days pulled
+before the manifest existed BEFORE deleting the cache: it checks each file
+against the cache, so after deletion every file would be marked unread.
 """
 
 from __future__ import annotations
 
 import argparse
+import hashlib
 import logging
 import sqlite3
 import textwrap
@@ -49,9 +61,11 @@ from src.gdelt.schema import USED_COLUMNS
 from src.store.database import (
     DB_PATH,
     FILES_PER_DAY,
+    MANIFEST_COLUMNS,
     connect,
     load_pull_log,
     save_day,
+    save_manifest,
 )
 from src.transform.aggregate import (
     UNREST_LOOSE_ROOT_CODES,
@@ -217,7 +231,69 @@ def print_unrest_by_code(codes: pd.DataFrame, limit: int = 10) -> None:
     print(textwrap.indent(table.to_string(index=False), "   "))
 
 
-# === 4. Download and process one day of GDELT data ===
+# === 4. Record which files a day was built from ===
+
+def manifest_for(
+        files: list[GdeltFile],
+        target: date,
+        read: set[str],
+    ) -> pd.DataFrame:
+    """
+    One row per listed file: address, published MD5, size, and whether it
+    was read (read holds the file names that were read).
+    """
+    return pd.DataFrame(
+        [
+            (target.isoformat(), f.url, f.md5, f.size_bytes,
+             f.filename in read)
+            for f in files
+        ],
+        columns=MANIFEST_COLUMNS,
+    )
+
+
+def cached_and_intact(file: GdeltFile) -> bool:
+    """
+    True when the file is in the cache and matches GDELT's published MD5.
+    """
+    path = CACHE_DIR / file.filename
+    if not path.exists():
+        return False
+
+    return hashlib.md5(path.read_bytes()).hexdigest() == file.md5
+
+
+def record_manifests(
+        index: list[GdeltFile],
+        days: list[date],
+        connection: sqlite3.Connection,
+    ) -> None:
+    """
+    Record the manifest of days that were pulled before the manifest
+    existed, without downloading or aggregating anything. A file counts as
+    read when the cache holds an intact copy (MD5 matches), which is what
+    the stored totals were built from.
+    """
+    stored = set(load_pull_log(connection)["date"])
+
+    for day in days:
+        if day.isoformat() not in stored:
+            print(f"{day}: not pulled yet, skipped")
+            continue
+
+        files = select_day(index, day)
+        read = {f.filename for f in files if cached_and_intact(f)}
+        save_manifest(connection, day, manifest_for(files, day, read))
+
+        note = "" if len(read) == len(files) else (
+            f" ({len(files) - len(read)} missing from the cache or not "
+            "matching their MD5)"
+        )
+        print(f"{day}: {len(files)} files recorded, {len(read)} intact in "
+              f"the cache{note}")
+
+
+# === 5. Download and process one day of GDELT data ===
 
 def pull_one_day(
     index: list[GdeltFile],
@@ -234,7 +310,7 @@ def pull_one_day(
 
     started = time.perf_counter()
 
-    # === 4.1 Find the files available for the requested date ===
+    # === 5.1 Find the files available for the requested date ===
 
     files = select_day(index, target)
 
@@ -242,7 +318,7 @@ def pull_one_day(
         print(f"{target}: no files listed (is the date in the future?)")
         return "empty"
 
-    # === 4.2 Download the available files ===
+    # === 5.2 Download the available files ===
 
     paths: list[Path] = []
     skipped: list[str] = []
@@ -261,7 +337,7 @@ def pull_one_day(
         print(f"{target}: nothing could be downloaded")
         return "empty"
 
-    # === 4.3 Read and aggregate the downloaded event data ===
+    # === 5.3 Read and aggregate the downloaded event data ===
 
     # Combine all successfully downloaded files into one DataFrame
     events = pd.concat(
@@ -286,7 +362,7 @@ def pull_one_day(
     unmatched = table.attrs["actor_codes_unmatched"]
     countries = table["iso3"].nunique()
 
-    # === 4.4 Print diagnostic summaries ===
+    # === 5.4 Print diagnostic summaries ===
 
     if verbose:
 
@@ -344,7 +420,7 @@ def pull_one_day(
         print_unrest_by_code(codes)
         print_unmatched_actor_codes(events, unmatched)
 
-    # === 5. Save the aggregated results ===
+    # === 5.5 Save the aggregated results and the file manifest ===
 
     status = "saved" if complete else "incomplete"
 
@@ -352,8 +428,10 @@ def pull_one_day(
 
         # Save the country-level and event-code-level tables
         # The file counts are also passed so that completeness can be recorded
+        read = {path.name for path in paths}
         written = save_day(
-            connection, table, target, len(files), len(paths), codes=codes
+            connection, table, target, len(files), len(paths), codes=codes,
+            manifest=manifest_for(files, target, read),
         )
 
         saved_text = f"saved {written} country rows"
@@ -490,6 +568,13 @@ def main() -> None:
         help="print the summary without saving to the database",
     )
 
+    parser.add_argument(
+        "--manifest-only",
+        action="store_true",
+        help="record the file manifest of days already pulled, without "
+             "pulling them again",
+    )
+
     args = parser.parse_args()
 
     # === 7.2 Validate the date selection ===
@@ -505,6 +590,10 @@ def main() -> None:
     if sum(chosen) > 1:
         raise SystemExit("use only one of --date, --from/--to, --days")
 
+    if args.manifest_only and (args.no_save or args.force):
+        raise SystemExit("--manifest-only cannot be used with --no-save "
+                         "or --force")
+
     logging.basicConfig(
         level=logging.WARNING, format="%(levelname)s %(message)s"
     )
@@ -519,6 +608,10 @@ def main() -> None:
     connection = None if args.no_save else connect(DB_PATH)
 
     try:
+        if args.manifest_only:
+            record_manifests(fetch_index(), days, connection)
+            return
+
         already: set[str] = set()
 
         # Retrieve the database pull log and identify dates already
